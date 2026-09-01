@@ -13,7 +13,7 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID"))
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-EXAM_DATES = ["15 сентября", "22 сентября", "29 сентября"]
+EXAM_DATES = ["15 sentabr", "22 sentabr", "29 sentabr"]
 PAYME_LINK = "https://payme.uz/fallback/merchant/?id=6a4673b9ccf9c1de0aa04520"
 CLICK_LINK = "https://indoor.click.uz/pay?id=0105991&t=0"
 
@@ -28,17 +28,17 @@ class ExamFlow(StatesGroup):
 async def start_handler(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "Здравствуйте! 👋\n\n"
-        "Вас интересует запись на экзамен по русскому языку для получения сертификата?\n\n"
-        "Экзамен проводится в Ташкенте.\n"
-        "Стоимость записи: 1 400 000 сум.\n\n"
-        "Напишите 'да', чтобы продолжить и узнать свободные даты."
+        "Assalomu alaykum! 👋\n\n"
+        "Sizni sertifikat olish uchun rus tili imtihoniga yozilish qiziqtiryaptimi?\n\n"
+        "Imtihon Toshkentda o'tkaziladi.\n"
+        "Yozilish narxi: 1 400 000 so'm.\n\n"
+        "Davom etish va bo'sh sanalarni bilish uchun 'ha' deb yozing."
     )
 
     voice = FSInputFile("greeting.ogg")
     await message.answer_voice(voice)
 
-@dp.message(F.text.lower() == "да")
+@dp.message(F.text.lower() == "ha")
 async def show_dates(message: Message):
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -46,7 +46,7 @@ async def show_dates(message: Message):
             for date in EXAM_DATES
         ]
     )
-    await message.answer("Выберите удобную дату экзамена:", reply_markup=keyboard)
+    await message.answer("Imtihon uchun qulay sanani tanlang:", reply_markup=keyboard)
 
 @dp.callback_query(F.data.startswith("date_"))
 async def date_chosen(callback, state: FSMContext):
@@ -54,8 +54,8 @@ async def date_chosen(callback, state: FSMContext):
     await state.update_data(exam_date=chosen_date)
     await state.set_state(ExamFlow.waiting_passport)
     await callback.message.answer(
-        f"Вы выбрали дату: {chosen_date} ✅\n\n"
-        "Для завершения записи, пожалуйста, отправьте фото загранпаспорта."
+        f"Siz {chosen_date} sanasini tanladingiz ✅\n\n"
+        "Yozilishni yakunlash uchun, iltimos, chet el pasporti rasmini yuboring."
     )
     await callback.answer()
 
@@ -63,11 +63,11 @@ async def date_chosen(callback, state: FSMContext):
 async def passport_handler(message: Message, state: FSMContext):
     await state.set_state(ExamFlow.waiting_receipt)
     await message.answer(
-        "Спасибо! Паспорт получен. 📄\n\n"
-        "Для оплаты записи используйте одну из ссылок:\n\n"
+        "Rahmat! Pasport qabul qilindi. 📄\n\n"
+        "To'lov uchun quyidagi havolalardan birini ishlating:\n\n"
         f"💳 Payme: {PAYME_LINK}\n"
         f"💳 Click: {CLICK_LINK}\n\n"
-        "После оплаты пришлите, пожалуйста, скриншот чека."
+        "To'lovdan so'ng, iltimos, chekning skrinshotini yuboring."
     )
 
 @dp.message(StateFilter(ExamFlow.waiting_receipt), F.photo | F.document)
@@ -76,8 +76,8 @@ async def receipt_handler(message: Message, state: FSMContext):
     exam_date = data.get("exam_date", "не указана")
 
     await message.answer(
-        "Спасибо! Чек получен. ⏳\n\n"
-        "Ожидайте подтверждения от администратора."
+        "Rahmat! Chek qabul qilindi. ⏳\n\n"
+        "Administrator tasdiqlashini kuting."
     )
 
     keyboard = InlineKeyboardMarkup(
@@ -102,9 +102,9 @@ async def confirm_payment(callback):
 
     await bot.send_message(
         client_id,
-        "Оплата подтверждена! ✅\n\n"
-        "За вами забронировано место на экзамен.\n\n"
-        "📍 Локация проведения экзамена:"
+        "To'lov tasdiqlandi! ✅\n\n"
+        "Siz uchun imtihonda joy band qilindi.\n\n"
+        "📍 Imtihon o'tkaziladigan joy:"
     )
     await bot.send_location(client_id, latitude=EXAM_LOCATION_LAT, longitude=EXAM_LOCATION_LON)
 
