@@ -5,7 +5,7 @@ from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 
 TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID"))
@@ -16,8 +16,6 @@ dp = Dispatcher(storage=MemoryStorage())
 EXAM_DATES = ["15 сентября", "22 сентября", "29 сентября"]
 PAYME_LINK = "https://payme.uz/fallback/merchant/?id=6a4673b9ccf9c1de0aa04520"
 CLICK_LINK = "https://indoor.click.uz/pay?id=0105991&t=0"
-
-
 
 EXAM_LOCATION_LAT = 41.29872833124857
 EXAM_LOCATION_LON = 69.34990462234283
@@ -36,6 +34,9 @@ async def start_handler(message: Message, state: FSMContext):
         "Стоимость записи: 1 400 000 сум.\n\n"
         "Напишите 'да', чтобы продолжить и узнать свободные даты."
     )
+
+    voice = FSInputFile("greeting.ogg")
+    await message.answer_voice(voice)
 
 @dp.message(F.text.lower() == "да")
 async def show_dates(message: Message):
