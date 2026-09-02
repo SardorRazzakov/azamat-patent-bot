@@ -50,7 +50,20 @@ class AdminFlow(StatesGroup):
 # ---------- ХЕЛПЕРЫ ----------
 
 def fmt_dt(raw: str | None) -> str:
-    return (raw or "")[:19].replace("T", " ")
+    """created_at лежит в базе в UTC, показываем в ташкентском времени.
+
+    Заявки, созданные до перехода на timezone-aware время, записаны через
+    utcnow() и лежат без смещения — их тоже считаем UTC.
+    """
+    if not raw:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return raw[:19].replace("T", " ")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(config.TZ).strftime("%d.%m.%Y %H:%M")
 
 
 def fmt_limit(seats_limit: int) -> str:
@@ -606,7 +619,7 @@ async def build_workbook() -> bytes:
     ws = wb.active
     ws.title = "Записи"
     headers = ["№", "Дата экзамена", "ФИО", "Username", "Telegram ID",
-               "Статус", "Подтвердил", "Создана (UTC)"]
+               "Статус", "Подтвердил", "Создана (Ташкент)"]
     ws.append(headers)
     for booking_id, date_title, full_name, username, user_id, status, confirmed_by, created_at in rows:
         ws.append([
@@ -657,7 +670,7 @@ async def export_excel(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Готовлю файл…")
 
     payload = await build_workbook()
-    filename = f"zapisi_{datetime.now(timezone.utc):%Y-%m-%d_%H-%M}.xlsx"
+    filename = f"zapisi_{datetime.now(config.TZ):%Y-%m-%d_%H-%M}.xlsx"
 
     await callback.message.answer_document(
         BufferedInputFile(payload, filename=filename),

@@ -1,4 +1,8 @@
 import os
+from datetime import timedelta, timezone
+
+# В базе время хранится в UTC, а админам показывается в этом поясе.
+TZ = timezone(timedelta(hours=5))  # Ташкент, UTC+5
 
 TOKEN = os.environ.get("BOT_TOKEN")
 DB_PATH = os.environ.get("DB_PATH", "bot.db")
