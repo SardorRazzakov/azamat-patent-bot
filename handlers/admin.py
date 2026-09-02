@@ -19,8 +19,13 @@ from openpyxl.utils import get_column_letter
 
 import config
 import db
+import texts
 
 PAGE_SIZE = 8
+
+# Ввод в FSM-шагах: любой текст, кроме команд. Иначе /start и прочие
+# команды попали бы в название даты вместо того, чтобы сработать.
+PLAIN_TEXT = F.text & ~F.text.startswith("/")
 
 STATUS_ICON = {db.PENDING: "⏳", db.CONFIRMED: "✅", db.CANCELLED: "❌"}
 STATUS_TEXT = {
@@ -214,7 +219,7 @@ async def date_add_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(AdminFlow.date_title, F.text)
+@router.message(AdminFlow.date_title, PLAIN_TEXT)
 async def date_add_title(message: Message, state: FSMContext):
     title = message.text.strip()
     if not title:
@@ -230,7 +235,7 @@ async def date_add_title(message: Message, state: FSMContext):
     )
 
 
-@router.message(AdminFlow.date_limit_new, F.text)
+@router.message(AdminFlow.date_limit_new, PLAIN_TEXT)
 async def date_add_limit(message: Message, state: FSMContext):
     if not message.text.strip().isdigit():
         await message.answer("Нужно целое число (0 — без лимита).")
@@ -283,7 +288,7 @@ async def date_limit_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(AdminFlow.date_limit_edit, F.text)
+@router.message(AdminFlow.date_limit_edit, PLAIN_TEXT)
 async def date_limit_save(message: Message, state: FSMContext):
     if not message.text.strip().isdigit():
         await message.answer("Нужно целое число (0 — без лимита).")
@@ -332,7 +337,7 @@ async def date_rename_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(AdminFlow.date_title_edit, F.text)
+@router.message(AdminFlow.date_title_edit, PLAIN_TEXT)
 async def date_rename_save(message: Message, state: FSMContext):
     title = message.text.strip()
     if not title:
@@ -562,12 +567,10 @@ async def booking_cancel_do(callback: CallbackQuery, bot: Bot):
 
     await callback.answer("Запись отменена")
 
+    # Язык клиента, а не админа, который нажал кнопку.
+    client_lang = texts.lang_or_default(await db.get_user_lang(user_id))
     try:
-        await bot.send_message(
-            user_id,
-            "Sizning imtihonga yozilishingiz bekor qilindi. ❌\n\n"
-            "Savollar bo'lsa, administrator bilan bog'laning."
-        )
+        await bot.send_message(user_id, texts.t("booking_cancelled", client_lang))
     except Exception as e:
         print(f"[client] не удалось уведомить {user_id} об отмене: {e}")
         await callback.message.answer(f"⚠️ Клиенту не доставлено уведомление: {e}")

@@ -55,6 +55,13 @@ async def db_init():
                 PRIMARY KEY (booking_id, admin_id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                lang TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings (date_id, status)"
         )
@@ -213,6 +220,27 @@ async def restore_date(date_id: int) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+
+
+# ---------- ЯЗЫК КЛИЕНТА ----------
+
+async def get_user_lang(user_id: int) -> str | None:
+    """None — клиент ещё не выбирал язык."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT lang FROM users WHERE user_id = ?", (user_id,))
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+
+async def set_user_lang(user_id: int, lang: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO users (user_id, lang, updated_at) VALUES (?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                   lang = excluded.lang, updated_at = excluded.updated_at""",
+            (user_id, lang, _now()),
+        )
+        await db.commit()
 
 
 # ---------- ЗАЯВКИ ----------
