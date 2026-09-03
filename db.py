@@ -1,9 +1,9 @@
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import aiosqlite
 
-from config import DB_PATH, DEFAULT_DATES
+from config import DB_PATH, DEFAULT_DATES, TZ
 
 # Статусы заявки
 PENDING = "pending"
@@ -12,6 +12,33 @@ CANCELLED = "cancelled"
 
 # Заявка занимает место, пока её не отменили
 ACTIVE_STATUSES = (PENDING, CONFIRMED)
+
+
+# Принимаем 07.09.2026, 7.9.26, 07.09 (текущий год), 2026-09-07.
+_DATE_PATTERNS = ("%d.%m.%Y", "%d.%m.%y", "%d.%m", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y")
+
+
+def parse_exam_date(raw: str) -> str | None:
+    """Текст -> 'YYYY-MM-DD'. None, если не дата или такого числа нет
+    в календаре (например, 31 сентября)."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    for pattern in _DATE_PATTERNS:
+        try:
+            dt = datetime.strptime(raw, pattern)
+        except ValueError:
+            continue
+        if "%Y" not in pattern and "%y" not in pattern:
+            dt = dt.replace(year=today().year)
+        return dt.date().isoformat()
+    return None
+
+
+def today() -> date:
+    """Сегодня по Ташкенту: в UTC дата переключается на 5 часов позже,
+    и вечером экзамен пропадал бы из записи на день раньше срока."""
+    return datetime.now(TZ).date()
 
 
 def _now() -> str:
@@ -28,7 +55,8 @@ async def db_init():
                 title TEXT NOT NULL UNIQUE,
                 seats_limit INTEGER NOT NULL DEFAULT 0,
                 is_active INTEGER NOT NULL DEFAULT 1,
-                sort_order INTEGER NOT NULL DEFAULT 0
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                exam_date TEXT
             )
         """)
         await db.execute("""
@@ -56,6 +84,13 @@ async def db_init():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS fsm_storage (
+                key TEXT PRIMARY KEY,
+                state TEXT,
+                data TEXT NOT NULL DEFAULT '{}'
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 lang TEXT NOT NULL,
@@ -65,14 +100,40 @@ async def db_init():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings (date_id, status)"
         )
+        # колонки появились позже таблицы — досоздаём в уже существующих базах
+        cur = await db.execute("PRAGMA table_info(bookings)")
+        columns = {row[1] for row in await cur.fetchall()}
+        for column, kind in (("cancelled_by", "INTEGER"), ("cancelled_by_name", "TEXT")):
+            if column not in columns:
+                await db.execute(f"ALTER TABLE bookings ADD COLUMN {column} {kind}")
+                print(f"[db] добавлена колонка bookings.{column}")
+
+        cur = await db.execute("PRAGMA table_info(exam_dates)")
+        if "exam_date" not in {row[1] for row in await cur.fetchall()}:
+            await db.execute("ALTER TABLE exam_dates ADD COLUMN exam_date TEXT")
+            print("[db] добавлена колонка exam_dates.exam_date")
+            # у дат вида 07.09.2026 число вытаскивается из названия;
+            # «15 sentabr» и прочий свободный текст остаётся без даты
+            cur = await db.execute("SELECT id, title FROM exam_dates")
+            filled = 0
+            for date_id, title in await cur.fetchall():
+                iso = parse_exam_date(title)
+                if iso:
+                    await db.execute(
+                        "UPDATE exam_dates SET exam_date = ? WHERE id = ?", (iso, date_id)
+                    )
+                    filled += 1
+            print(f"[db] дата распознана у {filled} записей из названия")
+
         # первичное заполнение датами
         cur = await db.execute("SELECT COUNT(*) FROM exam_dates")
         (count,) = await cur.fetchone()
         if count == 0:
-            for i, title in enumerate(DEFAULT_DATES):
+            for i, (title, seats_limit) in enumerate(DEFAULT_DATES):
                 await db.execute(
-                    "INSERT INTO exam_dates (title, seats_limit, sort_order) VALUES (?, ?, ?)",
-                    (title, 0, i),
+                    """INSERT INTO exam_dates (title, seats_limit, sort_order, exam_date)
+                       VALUES (?, ?, ?, ?)""",
+                    (title, seats_limit, i, parse_exam_date(title)),
                 )
         await db.commit()
     print(f"[db] готова: {DB_PATH}")
@@ -90,10 +151,12 @@ async def get_bookable_dates() -> list[tuple[int, str]]:
             LEFT JOIN bookings b
                    ON b.date_id = d.id AND b.status IN ('pending', 'confirmed')
             WHERE d.is_active = 1
+              AND (d.exam_date IS NULL OR d.exam_date >= ?)
             GROUP BY d.id
             HAVING d.seats_limit = 0 OR COUNT(b.id) < d.seats_limit
-            ORDER BY d.sort_order, d.id
-            """
+            ORDER BY d.exam_date IS NULL, d.exam_date, d.sort_order, d.id
+            """,
+            (today().isoformat(),),
         )
         return await cur.fetchall()
 
@@ -107,9 +170,10 @@ async def is_date_bookable(date_id: int) -> bool:
             LEFT JOIN bookings b
                    ON b.date_id = d.id AND b.status IN ('pending', 'confirmed')
             WHERE d.id = ? AND d.is_active = 1
+              AND (d.exam_date IS NULL OR d.exam_date >= ?)
             GROUP BY d.id
             """,
-            (date_id,),
+            (date_id, today().isoformat()),
         )
         row = await cur.fetchone()
         if not row:
@@ -134,11 +198,12 @@ async def get_dates_overview() -> list[tuple]:
             """
             SELECT d.id, d.title, d.seats_limit, d.is_active,
                    COALESCE(SUM(b.status = 'confirmed'), 0),
-                   COALESCE(SUM(b.status = 'pending'), 0)
+                   COALESCE(SUM(b.status = 'pending'), 0),
+                   d.exam_date
             FROM exam_dates d
             LEFT JOIN bookings b ON b.date_id = d.id
             GROUP BY d.id
-            ORDER BY d.sort_order, d.id
+            ORDER BY d.exam_date IS NULL, d.exam_date, d.sort_order, d.id
             """
         )
         return await cur.fetchall()
@@ -150,7 +215,8 @@ async def get_date_overview(date_id: int) -> tuple | None:
             """
             SELECT d.id, d.title, d.seats_limit, d.is_active,
                    COALESCE(SUM(b.status = 'confirmed'), 0),
-                   COALESCE(SUM(b.status = 'pending'), 0)
+                   COALESCE(SUM(b.status = 'pending'), 0),
+                   d.exam_date
             FROM exam_dates d
             LEFT JOIN bookings b ON b.date_id = d.id
             WHERE d.id = ?
@@ -161,15 +227,17 @@ async def get_date_overview(date_id: int) -> tuple | None:
         return await cur.fetchone()
 
 
-async def add_date(title: str, seats_limit: int = 0) -> int | None:
+async def add_date(title: str, seats_limit: int = 0,
+                   exam_date: str | None = None) -> int | None:
     """Возвращает id новой даты или None, если такая дата уже есть."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM exam_dates")
         (sort_order,) = await cur.fetchone()
         try:
             cur = await db.execute(
-                "INSERT INTO exam_dates (title, seats_limit, sort_order) VALUES (?, ?, ?)",
-                (title, seats_limit, sort_order),
+                """INSERT INTO exam_dates (title, seats_limit, sort_order, exam_date)
+                   VALUES (?, ?, ?, ?)""",
+                (title, seats_limit, sort_order, exam_date),
             )
         except sqlite3.IntegrityError:
             return None
@@ -188,6 +256,15 @@ async def rename_date(date_id: int, title: str) -> str:
             return "duplicate"
         await db.commit()
         return "ok" if cur.rowcount > 0 else "missing"
+
+
+async def set_exam_date(date_id: int, exam_date: str | None) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE exam_dates SET exam_date = ? WHERE id = ?", (exam_date, date_id)
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def set_date_limit(date_id: int, seats_limit: int) -> bool:
@@ -257,18 +334,50 @@ async def has_active_booking(user_id: int) -> bool:
 async def create_booking(
     user_id: int, full_name: str, username: str, date_id: int,
     passport_file_id: str, receipt_file_id: str,
-) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            """INSERT INTO bookings
-               (user_id, full_name, username, date_id, passport_file_id,
-                receipt_file_id, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
-            (user_id, full_name, username, date_id, passport_file_id,
-             receipt_file_id, _now()),
-        )
-        await db.commit()
-        return cur.lastrowid
+) -> int | None:
+    """None — на дате не осталось мест или её удалили.
+
+    Проверка лимита и вставка идут в одной транзакции: иначе двое клиентов
+    успевают пройти is_date_bookable() и оба занимают последнее место.
+    """
+    async with aiosqlite.connect(DB_PATH, isolation_level=None) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute(
+                "SELECT seats_limit FROM exam_dates WHERE id = ? AND is_active = 1",
+                (date_id,),
+            )
+            row = await cur.fetchone()
+            if not row:
+                await db.execute("ROLLBACK")
+                return None
+
+            seats_limit = row[0]
+            if seats_limit:
+                cur = await db.execute(
+                    """SELECT COUNT(*) FROM bookings
+                       WHERE date_id = ? AND status IN (?, ?)""",
+                    (date_id, PENDING, CONFIRMED),
+                )
+                (taken,) = await cur.fetchone()
+                if taken >= seats_limit:
+                    await db.execute("ROLLBACK")
+                    return None
+
+            cur = await db.execute(
+                """INSERT INTO bookings
+                   (user_id, full_name, username, date_id, passport_file_id,
+                    receipt_file_id, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, full_name, username, date_id, passport_file_id,
+                 receipt_file_id, PENDING, _now()),
+            )
+            booking_id = cur.lastrowid
+            await db.execute("COMMIT")
+            return booking_id
+        except Exception:
+            await db.execute("ROLLBACK")
+            raise
 
 
 async def get_bookings_for_date(date_id: int) -> list[tuple]:
@@ -287,11 +396,16 @@ async def get_bookings_for_date(date_id: int) -> list[tuple]:
 
 async def get_booking(booking_id: int) -> tuple | None:
     """(id, user_id, full_name, username, date_id, status, confirmed_by_name,
-        created_at, date_title)."""
+        created_at, date_title, passport_file_id, receipt_file_id,
+        cancelled_by_name).
+
+    Новые поля добавлены в конец, чтобы не ломать распаковку по индексам.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """SELECT b.id, b.user_id, b.full_name, b.username, b.date_id, b.status,
-                      b.confirmed_by_name, b.created_at, d.title
+                      b.confirmed_by_name, b.created_at, d.title,
+                      b.passport_file_id, b.receipt_file_id, b.cancelled_by_name
                FROM bookings b
                LEFT JOIN exam_dates d ON d.id = b.date_id
                WHERE b.id = ?""",
@@ -300,12 +414,16 @@ async def get_booking(booking_id: int) -> tuple | None:
         return await cur.fetchone()
 
 
-async def cancel_booking(booking_id: int) -> tuple[bool, int | None]:
+async def cancel_booking(
+    booking_id: int, admin_id: int, admin_name: str
+) -> tuple[bool, int | None]:
     """Возвращает (была ли отменена сейчас, user_id клиента)."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "UPDATE bookings SET status = 'cancelled' WHERE id = ? AND status != 'cancelled'",
-            (booking_id,),
+            """UPDATE bookings
+               SET status = ?, cancelled_by = ?, cancelled_by_name = ?
+               WHERE id = ? AND status != ?""",
+            (CANCELLED, admin_id, admin_name, booking_id, CANCELLED),
         )
         await db.commit()
         changed = cur.rowcount > 0
@@ -387,6 +505,7 @@ async def get_export_rows() -> list[tuple]:
                       b.status, b.confirmed_by_name, b.created_at
                FROM bookings b
                LEFT JOIN exam_dates d ON d.id = b.date_id
-               ORDER BY d.sort_order, d.id, b.created_at, b.id"""
+               ORDER BY d.exam_date IS NULL, d.exam_date, d.sort_order,
+                        d.id, b.created_at, b.id"""
         )
         return await cur.fetchall()

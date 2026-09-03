@@ -2,12 +2,12 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat
 
 import config
 import handlers
 from db import db_init
+from storage import SQLiteStorage
 
 
 async def set_admin_commands(bot: Bot):
@@ -27,11 +27,12 @@ async def set_admin_commands(bot: Bot):
 async def main():
     config.validate()
 
-    bot = Bot(token=config.TOKEN)
-    dp = Dispatcher(storage=MemoryStorage())
-    handlers.setup(dp)
-
+    # база поднимается раньше диспетчера: в ней же лежит хранилище FSM
     await db_init()
+
+    bot = Bot(token=config.TOKEN)
+    dp = Dispatcher(storage=SQLiteStorage(config.DB_PATH))
+    handlers.setup(dp)
     await set_admin_commands(bot)
     await dp.start_polling(bot)
 

@@ -135,6 +135,25 @@ TEXTS: dict[str, dict[str, str]] = {
         UZ_CYRL: "Тўлов чекининг скриншотини кутяпман. 🧾",
         UZ_LATN: "To'lov chekining skrinshotini kutyapman. 🧾",
     },
+    "seat_gone": {
+        RU: (
+            "К сожалению, места на эту дату закончились, "
+            "пока вы оформляли запись. 😔\n\n"
+            "Свяжитесь с администратором — он поможет с переносом или возвратом."
+        ),
+        UZ_CYRL: (
+            "Афсуски, сиз ариза тўлдираётган пайтда "
+            "бу санада жойлар тугади. 😔\n\n"
+            "Администратор билан боғланинг — у бошқа санага ўтказиш ёки "
+            "пулни қайтариш бўйича ёрдам беради."
+        ),
+        UZ_LATN: (
+            "Afsuski, siz ariza to'ldirayotgan paytda "
+            "bu sanada joylar tugadi. 😔\n\n"
+            "Administrator bilan bog'laning — u boshqa sanaga o'tkazish yoki "
+            "pulni qaytarish bo'yicha yordam beradi."
+        ),
+    },
     "receipt_received": {
         RU: "Спасибо! Чек принят. ⏳\n\nДождитесь подтверждения администратора.",
         UZ_CYRL: "Раҳмат! Чек қабул қилинди. ⏳\n\nАдминистратор тасдиқлашини кутинг.",

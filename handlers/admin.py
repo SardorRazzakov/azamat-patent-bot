@@ -50,6 +50,8 @@ class AdminFlow(StatesGroup):
     date_limit_new = State()
     date_limit_edit = State()
     date_title_edit = State()
+    date_value = State()
+    date_value_edit = State()
 
 
 # ---------- ХЕЛПЕРЫ ----------
@@ -124,26 +126,80 @@ async def admin_menu(callback: CallbackQuery, state: FSMContext):
 
 # ---------- ДАТЫ ----------
 
+def is_past(exam_date: str | None) -> bool:
+    return bool(exam_date) and exam_date < db.today().isoformat()
+
+
+def fmt_exam_date(exam_date: str | None) -> str:
+    if not exam_date:
+        return "не задана"
+    return datetime.strptime(exam_date, "%Y-%m-%d").strftime("%d.%m.%Y")
+
+
+def date_button(row: tuple) -> list[InlineKeyboardButton]:
+    date_id, title, seats_limit, is_active, confirmed, pending, exam_date = row
+    taken = confirmed + pending
+    seats = f"{taken}/{seats_limit}" if seats_limit else f"{taken}"
+    if not is_active:
+        mark = "🚫 "
+    elif is_past(exam_date):
+        mark = "⌛ "
+    else:
+        mark = ""
+    return [InlineKeyboardButton(
+        text=f"{mark}{title} — {seats}", callback_data=f"a:d:{date_id}"
+    )]
+
+
 async def render_dates(callback: CallbackQuery):
+    """Только активные даты. Скрытые убраны с глаз, но не потеряны:
+    они за кнопкой «Скрытые», откуда их можно вернуть в запись."""
     dates = await db.get_dates_overview()
+    active = [d for d in dates if d[3]]
+    hidden = [d for d in dates if not d[3]]
 
-    rows = []
-    for date_id, title, seats_limit, is_active, confirmed, pending in dates:
-        taken = confirmed + pending
-        seats = f"{taken}/{seats_limit}" if seats_limit else f"{taken}"
-        mark = "" if is_active else "🚫 "
+    rows = [date_button(d) for d in active]
+    if hidden:
         rows.append([InlineKeyboardButton(
-            text=f"{mark}{title} — {seats}", callback_data=f"a:d:{date_id}"
+            text=f"🚫 Скрытые ({len(hidden)})", callback_data="a:dhid"
         )])
-
     rows.append([InlineKeyboardButton(text="➕ Добавить дату", callback_data="a:dadd")])
     rows.append([back_button("a:menu", "⬅️ В меню")])
 
-    text = "📅 Даты экзамена\n\nВ кнопках — занято мест (записи в ожидании + подтверждённые)."
-    if not dates:
+    if active:
+        text = ("📅 Даты экзамена\n\n"
+                "В кнопках — занято мест (записи в ожидании + подтверждённые).")
+    elif hidden:
+        text = "📅 Даты экзамена\n\nАктивных дат нет — все скрыты из записи."
+    else:
         text = "📅 Даты экзамена\n\nПока ни одной даты нет."
 
     await show(callback, text, InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+async def render_hidden_dates(callback: CallbackQuery):
+    hidden = [d for d in await db.get_dates_overview() if not d[3]]
+    if not hidden:
+        await render_dates(callback)
+        return
+
+    rows = [date_button(d) for d in hidden]
+    rows.append([back_button("a:dates")])
+    await show(
+        callback,
+        "🚫 Скрытые даты\n\n"
+        "Клиенты их не видят. Откройте дату, чтобы вернуть её в запись "
+        "или удалить окончательно.",
+        InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data == "a:dhid")
+async def hidden_dates_list(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await render_hidden_dates(callback)
+    await callback.answer()
+
 
 
 @router.callback_query(F.data == "a:dates")
@@ -159,13 +215,21 @@ async def render_date_detail(callback: CallbackQuery, date_id: int) -> bool:
         await render_dates(callback)
         return False
 
-    _, title, seats_limit, is_active, confirmed, pending = row
+    _, title, seats_limit, is_active, confirmed, pending, exam_date = row
     taken = confirmed + pending
     free = "—" if not seats_limit else max(seats_limit - taken, 0)
 
+    if not is_active:
+        status = "скрыта из записи"
+    elif is_past(exam_date):
+        status = "прошла — клиентам не показывается"
+    else:
+        status = "активна"
+
     text = (
         f"📅 {title}\n\n"
-        f"Статус: {'активна' if is_active else 'скрыта из записи'}\n"
+        f"Дата: {fmt_exam_date(exam_date)}\n"
+        f"Статус: {status}\n"
         f"Лимит мест: {fmt_limit(seats_limit)}\n"
         f"Свободно: {free}\n\n"
         f"✅ Подтверждено: {confirmed}\n"
@@ -175,6 +239,9 @@ async def render_date_detail(callback: CallbackQuery, date_id: int) -> bool:
     rows = [
         [InlineKeyboardButton(
             text="👥 Записавшиеся", callback_data=f"a:bk:{date_id}:0"
+        )],
+        [InlineKeyboardButton(
+            text="📆 Изменить дату", callback_data=f"a:ddate:{date_id}"
         )],
         [InlineKeyboardButton(
             text="🔢 Изменить лимит", callback_data=f"a:dlim:{date_id}"
@@ -191,7 +258,7 @@ async def render_date_detail(callback: CallbackQuery, date_id: int) -> bool:
         rows.append([InlineKeyboardButton(
             text="♻️ Вернуть в запись", callback_data=f"a:drst:{date_id}"
         )])
-    rows.append([back_button("a:dates")])
+    rows.append([back_button("a:dates" if is_active else "a:dhid")])
 
     await show(callback, text, InlineKeyboardMarkup(inline_keyboard=rows))
     return True
@@ -208,25 +275,32 @@ async def date_detail(callback: CallbackQuery):
 
 @router.callback_query(F.data == "a:dadd")
 async def date_add_start(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(AdminFlow.date_title)
+    await state.set_state(AdminFlow.date_value)
     await show(
         callback,
         "➕ Новая дата\n\n"
-        "Пришлите название так, как его увидит клиент (например: 6 oktabr).\n\n"
+        "Пришлите дату экзамена.\n"
+        "Формат: 07.09.2026 (можно 7.9.26 или 07.09 — год текущий).\nНесуществующие числа вроде 31.09 бот не примет.\n\n"
         "/cancel — отмена",
         InlineKeyboardMarkup(inline_keyboard=[[back_button("a:dates", "⬅️ Отмена")]]),
     )
     await callback.answer()
 
 
-@router.message(AdminFlow.date_title, PLAIN_TEXT)
-async def date_add_title(message: Message, state: FSMContext):
-    title = message.text.strip()
-    if not title:
-        await message.answer("Название не может быть пустым. Попробуйте ещё раз.")
+@router.message(AdminFlow.date_value, PLAIN_TEXT)
+async def date_add_value(message: Message, state: FSMContext):
+    iso = db.parse_exam_date(message.text)
+    if not iso:
+        await message.answer(
+            "Не понял дату, либо такого числа нет в календаре.\n\n"
+            "Формат: 07.09.2026 (можно 7.9.26 или 07.09 — год текущий).\nНесуществующие числа вроде 31.09 бот не примет."
+        )
         return
 
-    await state.update_data(title=title)
+    # название выводим из даты: так оно не разъедется с сортировкой,
+    # а переименовать под свой вкус можно потом
+    title = fmt_exam_date(iso)
+    await state.update_data(title=title, exam_date=iso)
     await state.set_state(AdminFlow.date_limit_new)
     await message.answer(
         f"Название: {title}\n\n"
@@ -245,7 +319,7 @@ async def date_add_limit(message: Message, state: FSMContext):
     data = await state.get_data()
     await state.clear()
 
-    date_id = await db.add_date(data["title"], seats_limit)
+    date_id = await db.add_date(data["title"], seats_limit, data.get("exam_date"))
     if date_id is None:
         await message.answer(
             f"Дата «{data['title']}» уже есть в списке.",
@@ -262,6 +336,62 @@ async def date_add_limit(message: Message, state: FSMContext):
     )
 
 
+@router.callback_query(F.data.startswith("a:ddate:"))
+async def date_value_start(callback: CallbackQuery, state: FSMContext):
+    date_id = int(callback.data.split(":")[2])
+    row = await db.get_date_overview(date_id)
+    if not row:
+        await callback.answer("Дата не найдена.", show_alert=True)
+        return
+
+    await state.set_state(AdminFlow.date_value_edit)
+    await state.update_data(date_id=date_id)
+    await show(
+        callback,
+        f"📆 Дата для «{row[1]}»\n\n"
+        f"Сейчас: {fmt_exam_date(row[6])}\n\n"
+        "Пришлите новую дату. От неё зависят порядок в списке и то, "
+        f"когда дата перестанет показываться клиентам.\n"
+        "Формат: 07.09.2026 (можно 7.9.26 или 07.09 — год текущий).\nНесуществующие числа вроде 31.09 бот не примет.\n\n"
+        "/cancel — отмена",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [back_button(f"a:d:{date_id}", "⬅️ Отмена")]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(AdminFlow.date_value_edit, PLAIN_TEXT)
+async def date_value_save(message: Message, state: FSMContext):
+    iso = db.parse_exam_date(message.text)
+    if not iso:
+        await message.answer(
+            "Не понял дату, либо такого числа нет в календаре.\n\n"
+            "Формат: 07.09.2026 (можно 7.9.26 или 07.09 — год текущий).\nНесуществующие числа вроде 31.09 бот не примет."
+        )
+        return
+
+    data = await state.get_data()
+    date_id = data["date_id"]
+    await state.clear()
+
+    if not await db.set_exam_date(date_id, iso):
+        await message.answer("Дата не найдена.", reply_markup=menu_keyboard())
+        return
+
+    warning = ""
+    if is_past(iso):
+        warning = f"\n\n⚠️ Это прошедшее число — клиентам дата больше не покажется."
+
+    await message.answer(
+        f"✅ Дата экзамена: {fmt_exam_date(iso)}.{warning}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📅 К дате", callback_data=f"a:d:{date_id}")],
+            [back_button("a:dates", "⬅️ К списку дат")],
+        ]),
+    )
+
+
 @router.callback_query(F.data.startswith("a:dlim:"))
 async def date_limit_start(callback: CallbackQuery, state: FSMContext):
     date_id = int(callback.data.split(":")[2])
@@ -270,7 +400,7 @@ async def date_limit_start(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Дата не найдена.", show_alert=True)
         return
 
-    _, title, seats_limit, _, confirmed, pending = row
+    _, title, seats_limit, _, confirmed, pending, _ = row
     await state.set_state(AdminFlow.date_limit_edit)
     await state.update_data(date_id=date_id)
 
@@ -377,7 +507,7 @@ async def date_delete_confirm(callback: CallbackQuery):
         await callback.answer("Дата не найдена.", show_alert=True)
         return
 
-    _, title, _, _, confirmed, pending = row
+    _, title, _, _, confirmed, pending, _ = row
     total = confirmed + pending
 
     text = f"🗑 Удалить дату «{title}»?"
@@ -421,7 +551,7 @@ async def bookings_dates(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(
             text=f"{title} — {confirmed + pending}", callback_data=f"a:bk:{date_id}:0"
         )]
-        for date_id, title, _, _, confirmed, pending in dates
+        for date_id, title, _, _, confirmed, pending, _ in dates
     ]
     rows.append([back_button("a:menu", "⬅️ В меню")])
 
@@ -457,9 +587,10 @@ async def bookings_list(callback: CallbackQuery):
     for booking_id, full_name, username, _, status, _, _ in chunk:
         icon = STATUS_ICON.get(status, "•")
         name = full_name or (f"@{username}" if username else "без имени")
-        name = name[:32]
+        name = name[:24]
         rows.append([InlineKeyboardButton(
-            text=f"{icon} №{booking_id} {name}", callback_data=f"a:b:{booking_id}"
+            text=f"{icon} №{booking_id} · клиент: {name}",
+            callback_data=f"a:b:{booking_id}",
         )])
 
     nav = []
@@ -492,20 +623,28 @@ async def render_booking_detail(callback: CallbackQuery, booking_id: int) -> boo
         return False
 
     (_, user_id, full_name, username, date_id, status,
-     confirmed_by_name, created_at, date_title) = row
+     confirmed_by_name, created_at, date_title,
+     passport_file_id, receipt_file_id, cancelled_by_name) = row
 
-    text = (
-        f"Заявка №{booking_id}\n\n"
+    lines = [
+        f"Заявка №{booking_id}\n",
         f"Клиент: {full_name or '—'}"
-        f"{' (@' + username + ')' if username else ''}\n"
-        f"ID: {user_id}\n"
-        f"Дата экзамена: {date_title or '—'}\n"
-        f"Статус: {STATUS_ICON.get(status, '•')} {STATUS_TEXT.get(status, status)}\n"
-        f"Подтвердил: {confirmed_by_name or '—'}\n"
-        f"Создана: {fmt_dt(created_at)}"
-    )
+        f"{' (@' + username + ')' if username else ''}",
+        f"ID: {user_id}",
+        f"Дата экзамена: {date_title or '—'}",
+        f"Статус: {STATUS_ICON.get(status, '•')} {STATUS_TEXT.get(status, status)}",
+        f"Подтвердил: {confirmed_by_name or '—'}",
+    ]
+    if status == db.CANCELLED:
+        lines.append(f"Отменил: {cancelled_by_name or '—'}")
+    lines.append(f"Создана: {fmt_dt(created_at)}")
+    text = "\n".join(lines)
 
     rows = []
+    if passport_file_id or receipt_file_id:
+        rows.append([InlineKeyboardButton(
+            text="📎 Документы", callback_data=f"a:bdoc:{booking_id}"
+        )])
     if status != db.CANCELLED:
         rows.append([InlineKeyboardButton(
             text="❌ Отменить запись", callback_data=f"a:bc:{booking_id}"
@@ -523,6 +662,35 @@ async def booking_detail(callback: CallbackQuery):
         await callback.answer()
     else:
         await callback.answer("Заявка не найдена.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("a:bdoc:"))
+async def booking_documents(callback: CallbackQuery, bot: Bot):
+    """Присылает админу паспорт и чек — file_id хранятся с момента подачи."""
+    booking_id = int(callback.data.split(":")[2])
+    row = await db.get_booking(booking_id)
+    if not row:
+        await callback.answer("Заявка не найдена.", show_alert=True)
+        return
+
+    sent = 0
+    for file_id, label in ((row[9], "паспорт"), (row[10], "чек")):
+        if not file_id:
+            continue
+        caption = f"Заявка №{booking_id}: {label}"
+        try:
+            await bot.send_photo(callback.from_user.id, file_id, caption=caption)
+        except TelegramBadRequest:
+            # клиент мог прислать документом, а не фото
+            try:
+                await bot.send_document(callback.from_user.id, file_id, caption=caption)
+            except TelegramBadRequest as e:
+                await callback.message.answer(f"⚠️ {caption} — не открылся: {e}")
+                continue
+        sent += 1
+
+    await callback.answer("Отправил" if sent else "Документов нет")
+
 
 
 @router.callback_query(F.data.startswith("a:bc:"))
@@ -554,7 +722,9 @@ async def booking_cancel_confirm(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("a:bc1:"))
 async def booking_cancel_do(callback: CallbackQuery, bot: Bot):
     booking_id = int(callback.data.split(":")[2])
-    changed, user_id = await db.cancel_booking(booking_id)
+    changed, user_id = await db.cancel_booking(
+        booking_id, callback.from_user.id, callback.from_user.full_name
+    )
 
     if user_id is None:
         await callback.answer("Заявка не найдена.", show_alert=True)
@@ -598,7 +768,7 @@ async def stats(callback: CallbackQuery, state: FSMContext):
 
     if dates:
         lines += ["", "По датам:"]
-        for _, title, seats_limit, is_active, confirmed, pending in dates:
+        for _, title, seats_limit, is_active, confirmed, pending, _ in dates:
             taken = confirmed + pending
             seats = f"{taken}/{seats_limit}" if seats_limit else str(taken)
             mark = "" if is_active else " (скрыта)"
@@ -640,7 +810,7 @@ async def build_workbook() -> bytes:
     headers2 = ["Дата", "Лимит мест", "Подтверждено", "Ждут подтверждения",
                 "Занято", "Свободно", "Активна"]
     ws2.append(headers2)
-    for _, title, seats_limit, is_active, confirmed, pending in dates:
+    for _, title, seats_limit, is_active, confirmed, pending, _ in dates:
         taken = confirmed + pending
         ws2.append([
             title,

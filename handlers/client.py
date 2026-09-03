@@ -177,6 +177,22 @@ async def receipt_handler(message: Message, state: FSMContext, lang: str, bot: B
         user.id, user.full_name, user.username or "",
         date_id, data.get("passport_file_id", ""), receipt_file_id,
     )
+    # место могло уйти, пока клиент платил: проверка идёт в одной
+    # транзакции со вставкой, поэтому здесь возможен None
+    if booking_id is None:
+        await state.clear()
+        await message.answer(texts.t("seat_gone", lang))
+        for admin_id in config.ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"⚠️ Место уже занято: {user.full_name} (ID {user.id}) "
+                    f"оплатил и прислал чек на дату «{date_title}», "
+                    f"но свободных мест не осталось.",
+                )
+            except Exception as e:
+                print(f"[admins] не доставлено админу {admin_id}: {e}")
+        return
 
     await message.answer(texts.t("receipt_received", lang))
 
