@@ -3,7 +3,7 @@ from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart, StateFilter
+from aiogram.filters import CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -91,10 +91,22 @@ def done_keyboard(admin_name: str) -> InlineKeyboardMarkup:
 
 # ---------- ВЫБОР ЯЗЫКА ----------
 
+REFERRAL_PREFIX = "ref_"
+
+
 @router.message(CommandStart())
-async def start_handler(message: Message, state: FSMContext):
+async def start_handler(message: Message, state: FSMContext, command: CommandObject):
     """Доступна в любой момент: сбрасывает состояние и даёт сменить язык."""
     await state.clear()
+
+    # t.me/bot?start=ref_<user_id> — кто привёл. Пишется только при первом
+    # запуске: add_referral() не перетирает уже записанного пригласившего.
+    payload = command.args or ""
+    if payload.startswith(REFERRAL_PREFIX):
+        raw = payload[len(REFERRAL_PREFIX):]
+        if raw.isdigit():
+            await db.add_referral(message.from_user.id, int(raw))
+
     await db.log_event(message.from_user.id, db.STEP_START)
     await message.answer(texts.CHOOSE_LANGUAGE, reply_markup=language_keyboard())
 
@@ -320,6 +332,18 @@ async def confirm_payment(callback: CallbackQuery, bot: Bot):
     except Exception as e:
         print(f"[client] не удалось уведомить {client_id}: {e}")
         await callback.message.answer(f"⚠️ Клиенту не доставлено: {e}")
+        return
+
+    # личная реферальная ссылка — отдельным сообщением, чтобы не мешать
+    # главному: подтверждение оплаты и адрес уже ушли
+    try:
+        me = await bot.me()
+        link = f"https://t.me/{me.username}?start={REFERRAL_PREFIX}{client_id}"
+        await bot.send_message(
+            client_id, texts.t("referral_link", client_lang, link=link)
+        )
+    except Exception as e:
+        print(f"[client] реферальная ссылка не отправлена {client_id}: {e}")
 
 
 # ---------- ПОДСКАЗКИ НА НЕОЖИДАННЫЙ ВВОД ----------

@@ -13,10 +13,11 @@
 import asyncio
 import logging
 from contextlib import suppress
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 import config
 import db
@@ -27,6 +28,9 @@ log = logging.getLogger(__name__)
 CHECK_EVERY = 3600
 SEND_FROM_HOUR = 9
 SEND_TO_HOUR = 21
+
+# Через сколько молчания считаем запись брошенной
+ABANDON_AFTER_HOURS = 24
 
 
 async def send_due_reminders(bot: Bot) -> int:
@@ -64,11 +68,82 @@ async def send_due_reminders(bot: Bot) -> int:
     return sent
 
 
+def continue_keyboard(lang: str) -> InlineKeyboardMarkup:
+    """Та же кнопка, что и в диалоге: ведёт к выбору даты."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=texts.t("btn_continue", lang), callback_data="go:dates"
+        )
+    ]])
+
+
+async def send_abandoned_nudges(bot: Bot) -> int:
+    """Одно сообщение тем, кто начал запись и пропал. Второй раз — никогда."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(hours=ABANDON_AFTER_HOURS)).isoformat()
+    users = await db.get_abandoned_users(cutoff)
+
+    sent = 0
+    for user_id in users:
+        lang = texts.lang_or_default(await db.get_user_lang(user_id))
+        try:
+            await bot.send_message(
+                user_id,
+                texts.t("abandoned_nudge", lang),
+                reply_markup=continue_keyboard(lang),
+            )
+            sent += 1
+        except Exception as e:
+            # флаг ставим в любом случае: повторять бессмысленно
+            log.warning("возврат: %s не доставлено: %s", user_id, e)
+        await db.mark_nudged(user_id)
+
+    if sent:
+        log.info("сообщений о брошенной записи: %d", sent)
+    return sent
+
+
+async def send_cert_renewals(bot: Bot) -> int:
+    """Напоминание тем, у кого сертификат истекает меньше чем через два месяца."""
+    today_iso = db.today().isoformat()
+    due = await db.get_cert_renewals(today_iso)
+
+    sent = 0
+    for booking_id, user_id, exam_date in due:
+        lang = texts.lang_or_default(await db.get_user_lang(user_id))
+        exam = date.fromisoformat(exam_date)
+        try:
+            expires = exam.replace(year=exam.year + db.CERT_YEARS)
+        except ValueError:
+            # 29 февраля: через три года такого числа нет
+            expires = exam.replace(year=exam.year + db.CERT_YEARS, day=28)
+        try:
+            await bot.send_message(
+                user_id,
+                texts.t(
+                    "cert_renewal", lang,
+                    title=exam.strftime("%d.%m.%Y"),
+                    expires=expires.strftime("%d.%m.%Y"),
+                ),
+                reply_markup=continue_keyboard(lang),
+            )
+            sent += 1
+        except Exception as e:
+            log.warning("продление: заявка %s не доставлена: %s", booking_id, e)
+        await db.mark_cert_reminded(booking_id)
+
+    if sent:
+        log.info("напоминаний о продлении: %d", sent)
+    return sent
+
+
 async def reminder_loop(bot: Bot):
     while True:
         try:
             if SEND_FROM_HOUR <= datetime.now(config.TZ).hour < SEND_TO_HOUR:
                 await send_due_reminders(bot)
+                await send_abandoned_nudges(bot)
+                await send_cert_renewals(bot)
         except Exception:
             log.exception("сбой в цикле напоминаний")
         await asyncio.sleep(CHECK_EVERY)

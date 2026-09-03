@@ -701,11 +701,19 @@ async def render_booking_detail(callback: CallbackQuery, booking_id: int) -> boo
      passport_file_id, receipt_file_id, cancelled_by_name,
      exam_date, outcome, outcome_by_name, outcome_at, applicant_name) = row
 
+    referrer_id = await db.get_referrer(user_id)
+    referrer = f"ID {referrer_id}" if referrer_id else None
+    if referrer_id:
+        who = await db.get_client_name(referrer_id)
+        if who:
+            referrer = f"{who} (ID {referrer_id})"
+
     lines = [
         f"Заявка №{booking_id}\n",
         f"Клиент: {full_name or '—'}"
         f"{' (@' + username + ')' if username else ''}",
         f"ID: {user_id}",
+        *([f"Пригласил: {referrer}"] if referrer else []),
         *([f"Записан: {applicant_name}"] if applicant_name else []),
         f"Дата экзамена: {date_title or '—'}",
         f"Статус: {STATUS_ICON.get(status, '•')} {STATUS_TEXT.get(status, status)}",
@@ -896,6 +904,21 @@ async def stats(callback: CallbackQuery, state: FSMContext):
         ]
         if ex['unmarked']:
             lines.append(f"Без итога: {ex['unmarked']} — их стоит проставить")
+
+    nd = await db.get_nudge_stats()
+    if nd['sent']:
+        lines += [
+            "",
+            f"↩️ Возврат брошенных: написали {nd['sent']}, "
+            f"вернулись и записались {nd['returned']} ({nd['pct']}%)",
+        ]
+
+    top = await db.get_top_referrers(5)
+    if top:
+        lines += ["", "🤝 Кто больше приводит:"]
+        for referrer_id, name, invited, paid in top:
+            who = name or f"ID {referrer_id}"
+            lines.append(f"• {who}: привёл {invited}, дошли до оплаты {paid}")
 
     if dates:
         lines += ["", "По датам:"]

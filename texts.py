@@ -215,6 +215,66 @@ TEXTS: dict[str, dict[str, str]] = {
             "📍 O'tkaziladigan manzil:"
         ),
     },
+    "abandoned_nudge": {
+        RU: (
+            "Вы начали запись на экзамен, но не завершили её. 🙂\n\n"
+            "Свободные места ещё есть. Нажмите кнопку ниже, "
+            "чтобы выбрать дату и закончить запись."
+        ),
+        UZ_CYRL: (
+            "Сиз имтиҳонга ёзилишни бошладингиз, лекин якунламадингиз. 🙂\n\n"
+            "Бўш жойлар ҳали бор. Сана танлаб, ёзилишни тугатиш учун "
+            "қуйидаги тугмани босинг."
+        ),
+        UZ_LATN: (
+            "Siz imtihonga yozilishni boshladingiz, lekin yakunlamadingiz. 🙂\n\n"
+            "Bo'sh joylar hali bor. Sana tanlab, yozilishni tugatish uchun "
+            "quyidagi tugmani bosing."
+        ),
+    },
+    "referral_link": {
+        RU: (
+            "Хотите пригласить друзей? 🤝\n\n"
+            "Отправьте им вашу личную ссылку:\n"
+            "{link}\n\n"
+            "Мы увидим, что они пришли от вас."
+        ),
+        UZ_CYRL: (
+            "Дўстларингизни таклиф қилмоқчимисиз? 🤝\n\n"
+            "Уларга шахсий ҳаволангизни юборинг:\n"
+            "{link}\n\n"
+            "Улар сиздан келганини биз кўрамиз."
+        ),
+        UZ_LATN: (
+            "Do'stlaringizni taklif qilmoqchimisiz? 🤝\n\n"
+            "Ularga shaxsiy havolangizni yuboring:\n"
+            "{link}\n\n"
+            "Ular sizdan kelganini biz ko'ramiz."
+        ),
+    },
+    "cert_renewal": {
+        RU: (
+            "Напоминание о сертификате. 📄\n\n"
+            "Ваш сертификат за {title} действует до {expires} — "
+            "осталось меньше двух месяцев.\n\n"
+            "Чтобы продлить, запишитесь на экзамен заранее: "
+            "нажмите кнопку ниже."
+        ),
+        UZ_CYRL: (
+            "Сертификат ҳақида эслатма. 📄\n\n"
+            "{title} учун сертификатингиз {expires} гача амал қилади — "
+            "икки ойдан камроқ вақт қолди.\n\n"
+            "Уни янгилаш учун имтиҳонга олдиндан ёзилинг: "
+            "қуйидаги тугмани босинг."
+        ),
+        UZ_LATN: (
+            "Sertifikat haqida eslatma. 📄\n\n"
+            "{title} uchun sertifikatingiz {expires} gacha amal qiladi — "
+            "ikki oydan kamroq vaqt qoldi.\n\n"
+            "Uni yangilash uchun imtihonga oldindan yoziling: "
+            "quyidagi tugmani bosing."
+        ),
+    },
     "booking_cancelled": {
         RU: (
             "Ваша запись на экзамен отменена. ❌\n\n"

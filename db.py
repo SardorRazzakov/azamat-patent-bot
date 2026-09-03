@@ -102,6 +102,7 @@ async def db_init():
                 outcome_by INTEGER,
                 outcome_by_name TEXT,
                 applicant_name TEXT,
+                cert_reminder_sent_at TEXT,
                 FOREIGN KEY (date_id) REFERENCES exam_dates(id)
             )
         """)
@@ -111,6 +112,19 @@ async def db_init():
                 admin_id INTEGER NOT NULL,
                 message_id INTEGER NOT NULL,
                 PRIMARY KEY (booking_id, admin_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS nudges (
+                user_id INTEGER PRIMARY KEY,
+                sent_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS referrals (
+                user_id INTEGER PRIMARY KEY,
+                referrer_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL
             )
         """)
         await db.execute("""
@@ -141,6 +155,9 @@ async def db_init():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_step ON events (step, created_at)"
         )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_user ON events (user_id, created_at)"
+        )
         # колонки появились позже таблицы — досоздаём в уже существующих базах
         cur = await db.execute("PRAGMA table_info(bookings)")
         columns = {row[1] for row in await cur.fetchall()}
@@ -153,6 +170,7 @@ async def db_init():
             ("outcome_by", "INTEGER"),
             ("outcome_by_name", "TEXT"),
             ("applicant_name", "TEXT"),
+            ("cert_reminder_sent_at", "TEXT"),
         ):
             if column not in columns:
                 await db.execute(f"ALTER TABLE bookings ADD COLUMN {column} {kind}")
@@ -396,6 +414,152 @@ async def get_outcome_stats() -> dict:
         # пока часть заявок ещё без итога
         "no_show_pct": round(no_show * 100 / marked) if marked else 0,
     }
+
+
+# ---------- ВОЗВРАТ БРОШЕННЫХ ЗАПИСЕЙ ----------
+
+async def get_abandoned_users(cutoff: str) -> list[int]:
+    """Кто начал запись, но не создал заявку, и молчит дольше cutoff.
+
+    Наличие любой заявки (в том числе отменённой) значит, что запись доведена до
+    конца — таким не пишем. Один раз на человека: строка в nudges.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """SELECT e.user_id
+               FROM events e
+               LEFT JOIN bookings b ON b.user_id = e.user_id
+               LEFT JOIN nudges n ON n.user_id = e.user_id
+               WHERE b.id IS NULL AND n.user_id IS NULL
+               GROUP BY e.user_id
+               HAVING MAX(e.created_at) < ?""",
+            (cutoff,),
+        )
+        return [row[0] for row in await cur.fetchall()]
+
+
+async def mark_nudged(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO nudges (user_id, sent_at) VALUES (?, ?)",
+            (user_id, _now()),
+        )
+        await db.commit()
+
+
+async def get_nudge_stats() -> dict:
+    """Сколько написали и сколько из них после этого записались."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM nudges")
+        (sent,) = await cur.fetchone()
+        cur = await db.execute(
+            """SELECT COUNT(*) FROM nudges n
+               WHERE EXISTS (SELECT 1 FROM bookings b
+                             WHERE b.user_id = n.user_id AND b.created_at > n.sent_at)"""
+        )
+        (returned,) = await cur.fetchone()
+    return {
+        "sent": sent,
+        "returned": returned,
+        "pct": round(returned * 100 / sent) if sent else 0,
+    }
+
+
+# ---------- РЕФЕРАЛЫ ----------
+
+async def get_client_name(user_id: int) -> str | None:
+    """Имя из последней заявки — единственное место, где оно у нас есть."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT full_name FROM bookings WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+
+async def add_referral(user_id: int, referrer_id: int) -> bool:
+    """Пишем только при первом запуске и только чужую ссылку."""
+    if user_id == referrer_id:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO referrals (user_id, referrer_id, created_at) "
+            "VALUES (?, ?, ?)",
+            (user_id, referrer_id, _now()),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_referrer(user_id: int) -> int | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT referrer_id FROM referrals WHERE user_id = ?", (user_id,)
+        )
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+
+async def get_top_referrers(limit: int = 10) -> list[tuple]:
+    """(referrer_id, имя, приведено, из них дошли до оплаты)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """SELECT r.referrer_id,
+                      (SELECT b.full_name FROM bookings b
+                        WHERE b.user_id = r.referrer_id
+                        ORDER BY b.id DESC LIMIT 1),
+                      COUNT(*),
+                      COUNT(DISTINCT CASE WHEN EXISTS (
+                          SELECT 1 FROM bookings b2
+                           WHERE b2.user_id = r.user_id AND b2.status = ?
+                      ) THEN r.user_id END)
+               FROM referrals r
+               GROUP BY r.referrer_id
+               ORDER BY 4 DESC, 3 DESC
+               LIMIT ?""",
+            (CONFIRMED, limit),
+        )
+        return await cur.fetchall()
+
+
+# ---------- ПРОДЛЕНИЕ СЕРТИФИКАТА ----------
+
+CERT_YEARS = 3
+CERT_WARN_MONTHS = 2
+
+
+async def get_cert_renewals(today_iso: str) -> list[tuple]:
+    """(booking_id, user_id, exam_date) — у кого до истечения осталось меньше
+    CERT_WARN_MONTHS и срок ещё не вышел.
+
+    Провалившим и не пришедшим не пишем: сертификата у них нет. Заявки без
+    проставленного итога включаем — админы часто не успевают их отметить.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            f"""SELECT b.id, b.user_id, d.exam_date
+                FROM bookings b
+                JOIN exam_dates d ON d.id = b.date_id
+                WHERE b.status = ?
+                  AND b.cert_reminder_sent_at IS NULL
+                  AND (b.outcome IS NULL OR b.outcome = ?)
+                  AND d.exam_date IS NOT NULL
+                  AND date(d.exam_date, '+{CERT_YEARS} years',
+                           '-{CERT_WARN_MONTHS} months') <= ?
+                  AND date(d.exam_date, '+{CERT_YEARS} years') > ?""",
+            (CONFIRMED, PASSED, today_iso, today_iso),
+        )
+        return await cur.fetchall()
+
+
+async def mark_cert_reminded(booking_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE bookings SET cert_reminder_sent_at = ? WHERE id = ?",
+            (_now(), booking_id),
+        )
+        await db.commit()
 
 
 # ---------- ВОРОНКА ----------
