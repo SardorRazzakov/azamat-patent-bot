@@ -72,6 +72,7 @@ async def db_init():
                 confirmed_by INTEGER,
                 confirmed_by_name TEXT,
                 created_at TEXT NOT NULL,
+                reminder_sent_at TEXT,
                 FOREIGN KEY (date_id) REFERENCES exam_dates(id)
             )
         """)
@@ -103,7 +104,11 @@ async def db_init():
         # колонки появились позже таблицы — досоздаём в уже существующих базах
         cur = await db.execute("PRAGMA table_info(bookings)")
         columns = {row[1] for row in await cur.fetchall()}
-        for column, kind in (("cancelled_by", "INTEGER"), ("cancelled_by_name", "TEXT")):
+        for column, kind in (
+            ("cancelled_by", "INTEGER"),
+            ("cancelled_by_name", "TEXT"),
+            ("reminder_sent_at", "TEXT"),
+        ):
             if column not in columns:
                 await db.execute(f"ALTER TABLE bookings ADD COLUMN {column} {kind}")
                 print(f"[db] добавлена колонка bookings.{column}")
@@ -297,6 +302,33 @@ async def restore_date(date_id: int) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+
+
+# ---------- НАПОМИНАНИЯ ----------
+
+async def get_bookings_to_remind(exam_date: str) -> list[tuple]:
+    """Подтверждённые заявки на дату exam_date, которым ещё не напоминали.
+    Возвращает (booking_id, user_id, date_title)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """SELECT b.id, b.user_id, d.title
+               FROM bookings b
+               JOIN exam_dates d ON d.id = b.date_id
+               WHERE b.status = ?
+                 AND d.exam_date = ?
+                 AND b.reminder_sent_at IS NULL""",
+            (CONFIRMED, exam_date),
+        )
+        return await cur.fetchall()
+
+
+async def mark_reminded(booking_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE bookings SET reminder_sent_at = ? WHERE id = ?",
+            (_now(), booking_id),
+        )
+        await db.commit()
 
 
 # ---------- ЯЗЫК КЛИЕНТА ----------

@@ -176,6 +176,26 @@ TEXTS: dict[str, dict[str, str]] = {
             "📍 Imtihon o'tkaziladigan joy:"
         ),
     },
+    "exam_reminder": {
+        RU: (
+            "Напоминание: завтра у вас экзамен по русскому языку. 📌\n\n"
+            "Дата: {title}\n"
+            "Возьмите с собой загранпаспорт и приходите заранее.\n\n"
+            "📍 Адрес проведения:"
+        ),
+        UZ_CYRL: (
+            "Эслатма: эртага сизда рус тили имтиҳони бор. 📌\n\n"
+            "Сана: {title}\n"
+            "Ўзингиз билан чет эл паспортини олинг ва олдиндан келинг.\n\n"
+            "📍 Ўтказиладиган манзил:"
+        ),
+        UZ_LATN: (
+            "Eslatma: ertaga sizda rus tili imtihoni bor. 📌\n\n"
+            "Sana: {title}\n"
+            "O'zingiz bilan chet el pasportini oling va oldindan keling.\n\n"
+            "📍 O'tkaziladigan manzil:"
+        ),
+    },
     "booking_cancelled": {
         RU: (
             "Ваша запись на экзамен отменена. ❌\n\n"

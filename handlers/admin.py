@@ -52,6 +52,7 @@ class AdminFlow(StatesGroup):
     date_title_edit = State()
     date_value = State()
     date_value_edit = State()
+    dates_bulk = State()
 
 
 # ---------- ХЕЛПЕРЫ ----------
@@ -164,6 +165,7 @@ async def render_dates(callback: CallbackQuery):
             text=f"🚫 Скрытые ({len(hidden)})", callback_data="a:dhid"
         )])
     rows.append([InlineKeyboardButton(text="➕ Добавить дату", callback_data="a:dadd")])
+    rows.append([InlineKeyboardButton(text="📋 Добавить списком", callback_data="a:dbulk")])
     rows.append([back_button("a:menu", "⬅️ В меню")])
 
     if active:
@@ -334,6 +336,66 @@ async def date_add_limit(message: Message, state: FSMContext):
             [back_button("a:menu", "⬅️ В меню")],
         ]),
     )
+
+
+@router.callback_query(F.data == "a:dbulk")
+async def dates_bulk_start(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminFlow.dates_bulk)
+    await show(
+        callback,
+        "📋 Добавить даты списком\n\n"
+        "Пришлите одним сообщением, по одной дате в строке:\n"
+        "07.09.2026 5\n"
+        "09.09.2026 25\n"
+        "11.09.2026 25\n\n"
+        "Число после даты — лимит мест (0 или без числа — без лимита).\n"
+        "Уже существующие даты и строки с ошибками бот пропустит и покажет какие.\n\n"
+        "/cancel — отмена",
+        InlineKeyboardMarkup(inline_keyboard=[[back_button("a:dates", "⬅️ Отмена")]]),
+    )
+    await callback.answer()
+
+
+@router.message(AdminFlow.dates_bulk, PLAIN_TEXT)
+async def dates_bulk_apply(message: Message, state: FSMContext):
+    added, duplicate, bad = [], [], []
+    for raw in message.text.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        # разделителем может быть пробел или тире; тире внутри 2026-09-07 не трогаем
+        parts = [p for p in raw.split() if p not in ("-", "—", "–")]
+        iso = db.parse_exam_date(parts[0]) if parts else None
+        if not iso:
+            bad.append(raw)
+            continue
+        seats_limit = int(parts[-1]) if len(parts) > 1 and parts[-1].isdigit() else 0
+        title = fmt_exam_date(iso)
+        if await db.add_date(title, seats_limit, iso) is None:
+            duplicate.append(title)
+        else:
+            added.append(f"{title} — {fmt_limit(seats_limit)}")
+
+    await state.clear()
+
+    report = []
+    if added:
+        report.append("✅ Добавлено ({}):\n".format(len(added)) + "\n".join(added))
+    if duplicate:
+        report.append("↩️ Уже были ({}):\n".format(len(duplicate)) + "\n".join(duplicate))
+    if bad:
+        report.append("⚠️ Не разобрал ({}):\n".format(len(bad)) + "\n".join(bad))
+    if not report:
+        report.append("Ни одной строки с датой не нашёл.")
+
+    await message.answer(
+        "\n\n".join(report),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📅 К списку дат", callback_data="a:dates")],
+            [back_button("a:menu", "⬅️ В меню")],
+        ]),
+    )
+
 
 
 @router.callback_query(F.data.startswith("a:ddate:"))
