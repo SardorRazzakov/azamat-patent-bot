@@ -42,6 +42,7 @@ router.callback_query.middleware(LanguageMiddleware())
 
 
 class ExamFlow(StatesGroup):
+    waiting_applicant = State()
     waiting_passport = State()
     waiting_receipt = State()
 
@@ -61,6 +62,14 @@ def continue_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text=texts.t("btn_continue", lang), callback_data="go:dates"
+        )
+    ]])
+
+
+def add_more_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=texts.t("btn_add_more", lang), callback_data="go:more"
         )
     ]])
 
@@ -86,6 +95,7 @@ def done_keyboard(admin_name: str) -> InlineKeyboardMarkup:
 async def start_handler(message: Message, state: FSMContext):
     """Доступна в любой момент: сбрасывает состояние и даёт сменить язык."""
     await state.clear()
+    await db.log_event(message.from_user.id, db.STEP_START)
     await message.answer(texts.CHOOSE_LANGUAGE, reply_markup=language_keyboard())
 
 
@@ -98,6 +108,7 @@ async def language_chosen(callback: CallbackQuery, state: FSMContext):
 
     await state.clear()
     await db.set_user_lang(callback.from_user.id, code)
+    await db.log_event(callback.from_user.id, db.STEP_LANG)
 
     # Язык из middleware здесь ещё прежний, поэтому дальше только code.
     with suppress(TelegramBadRequest):
@@ -114,27 +125,56 @@ async def language_chosen(callback: CallbackQuery, state: FSMContext):
 
 # ---------- ЗАПИСЬ НА ЭКЗАМЕН ----------
 
-@router.callback_query(F.data == "go:dates")
-async def show_dates(callback: CallbackQuery, lang: str):
-    if await db.has_active_booking(callback.from_user.id):
-        await callback.message.answer(texts.t("already_booked", lang))
-        await callback.answer()
-        return
-
+async def send_dates(message: Message, lang: str) -> bool:
+    """Показывает список дат. False — показывать нечего."""
     dates = await db.get_bookable_dates()
     if not dates:
-        await callback.message.answer(texts.t("no_dates", lang))
-        await callback.answer()
-        return
+        await message.answer(texts.t("no_dates", lang))
+        return False
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=title, callback_data=f"date_{date_id}")]
         for date_id, title in dates
     ])
-    await callback.message.answer(
-        texts.t("choose_date", lang), reply_markup=keyboard
-    )
+    await message.answer(texts.t("choose_date", lang), reply_markup=keyboard)
+    return True
+
+
+@router.callback_query(F.data == "go:dates")
+async def show_dates(callback: CallbackQuery, lang: str):
+    if await db.has_active_booking(callback.from_user.id):
+        # не тупик: с одного аккаунта часто записывают друзей, поэтому
+        # сразу предлагаем оформить заявку на другого человека
+        await callback.message.answer(
+            texts.t("already_booked", lang), reply_markup=add_more_keyboard(lang)
+        )
+        await callback.answer()
+        return
+
+    await send_dates(callback.message, lang)
     await callback.answer()
+
+
+@router.callback_query(F.data == "go:more")
+async def add_more_start(callback: CallbackQuery, state: FSMContext, lang: str):
+    """Запись друга с того же аккаунта. Проверку на «уже записан» здесь
+    не делаем осознанно: заявка оформляется на другого человека."""
+    await state.clear()
+    await state.set_state(ExamFlow.waiting_applicant)
+    await callback.message.answer(texts.t("ask_applicant_name", lang))
+    await callback.answer()
+
+
+@router.message(StateFilter(ExamFlow.waiting_applicant), F.text)
+async def applicant_name_received(message: Message, state: FSMContext, lang: str):
+    name = message.text.strip()
+    if not name:
+        await message.answer(texts.t("ask_applicant_name", lang))
+        return
+
+    await state.update_data(applicant_name=name[:100])
+    if not await send_dates(message, lang):
+        await state.clear()
 
 
 @router.callback_query(F.data.startswith("date_"))
@@ -147,6 +187,7 @@ async def date_chosen(callback: CallbackQuery, state: FSMContext, lang: str):
 
     title = await db.get_date_title(date_id)
 
+    await db.log_event(callback.from_user.id, db.STEP_DATE)
     await state.update_data(date_id=date_id, date_title=title)
     await state.set_state(ExamFlow.waiting_passport)
     await callback.message.answer(texts.t("date_chosen", lang, title=title))
@@ -158,6 +199,7 @@ async def passport_handler(message: Message, state: FSMContext, lang: str):
     file_id = message.photo[-1].file_id if message.photo else message.document.file_id
     await state.update_data(passport_file_id=file_id)
     await state.set_state(ExamFlow.waiting_receipt)
+    await db.log_event(message.from_user.id, db.STEP_PASSPORT)
     await message.answer(texts.t(
         "passport_received", lang,
         payme=config.PAYME_LINK, click=config.CLICK_LINK,
@@ -173,9 +215,12 @@ async def receipt_handler(message: Message, state: FSMContext, lang: str, bot: B
 
     receipt_file_id = message.photo[-1].file_id if message.photo else message.document.file_id
 
+    applicant_name = data.get("applicant_name")
+
     booking_id = await db.create_booking(
         user.id, user.full_name, user.username or "",
         date_id, data.get("passport_file_id", ""), receipt_file_id,
+        applicant_name,
     )
     # место могло уйти, пока клиент платил: проверка идёт в одной
     # транзакции со вставкой, поэтому здесь возможен None
@@ -194,14 +239,18 @@ async def receipt_handler(message: Message, state: FSMContext, lang: str, bot: B
                 print(f"[admins] не доставлено админу {admin_id}: {e}")
         return
 
-    await message.answer(texts.t("receipt_received", lang))
+    await db.log_event(user.id, db.STEP_RECEIPT)
+    await message.answer(
+        texts.t("receipt_received", lang), reply_markup=add_more_keyboard(lang)
+    )
 
     caption = (
         f"Заявка №{booking_id}\n"
         f"Клиент: {user.full_name}"
         f"{' (@' + user.username + ')' if user.username else ''}\n"
         f"ID: {user.id}\n"
-        f"Дата экзамена: {date_title}"
+        + (f"Записан: {applicant_name}\n" if applicant_name else "")
+        + f"Дата экзамена: {date_title}"
     )
 
     for admin_id in config.ADMIN_IDS:
@@ -256,6 +305,8 @@ async def confirm_payment(callback: CallbackQuery, bot: Bot):
             )
         except Exception as e:
             print(f"[admins] не удалось обновить сообщение у {admin_id}: {e}")
+
+    await db.log_event(client_id, db.STEP_PAID)
 
     # Язык клиента, а не того админа, который нажал кнопку.
     client_lang = texts.lang_or_default(await db.get_user_lang(client_id))

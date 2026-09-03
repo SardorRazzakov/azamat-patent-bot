@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import aiosqlite
 
@@ -12,6 +12,30 @@ CANCELLED = "cancelled"
 
 # Заявка занимает место, пока её не отменили
 ACTIVE_STATUSES = (PENDING, CONFIRMED)
+
+# Итог экзамена, проставляется админом после даты
+PASSED = "passed"
+FAILED = "failed"
+NO_SHOW = "no_show"
+OUTCOMES = (PASSED, FAILED, NO_SHOW)
+
+# Шаги воронки — по одному событию на шаг, порядок важен для отчёта
+STEP_START = "start"
+STEP_LANG = "lang"
+STEP_DATE = "date"
+STEP_PASSPORT = "passport"
+STEP_RECEIPT = "receipt"
+STEP_PAID = "paid"
+STEP_OUTCOME = "outcome"
+FUNNEL_STEPS = (
+    (STEP_START, "Запустили бота"),
+    (STEP_LANG, "Выбрали язык"),
+    (STEP_DATE, "Выбрали дату"),
+    (STEP_PASSPORT, "Прислали паспорт"),
+    (STEP_RECEIPT, "Прислали чек"),
+    (STEP_PAID, "Оплата подтверждена"),
+    (STEP_OUTCOME, "Результат проставлен"),
+)
 
 
 # Принимаем 07.09.2026, 7.9.26, 07.09 (текущий год), 2026-09-07.
@@ -73,6 +97,11 @@ async def db_init():
                 confirmed_by_name TEXT,
                 created_at TEXT NOT NULL,
                 reminder_sent_at TEXT,
+                outcome TEXT,
+                outcome_at TEXT,
+                outcome_by INTEGER,
+                outcome_by_name TEXT,
+                applicant_name TEXT,
                 FOREIGN KEY (date_id) REFERENCES exam_dates(id)
             )
         """)
@@ -82,6 +111,14 @@ async def db_init():
                 admin_id INTEGER NOT NULL,
                 message_id INTEGER NOT NULL,
                 PRIMARY KEY (booking_id, admin_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                step TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
         """)
         await db.execute("""
@@ -101,6 +138,9 @@ async def db_init():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings (date_id, status)"
         )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_step ON events (step, created_at)"
+        )
         # колонки появились позже таблицы — досоздаём в уже существующих базах
         cur = await db.execute("PRAGMA table_info(bookings)")
         columns = {row[1] for row in await cur.fetchall()}
@@ -108,6 +148,11 @@ async def db_init():
             ("cancelled_by", "INTEGER"),
             ("cancelled_by_name", "TEXT"),
             ("reminder_sent_at", "TEXT"),
+            ("outcome", "TEXT"),
+            ("outcome_at", "TEXT"),
+            ("outcome_by", "INTEGER"),
+            ("outcome_by_name", "TEXT"),
+            ("applicant_name", "TEXT"),
         ):
             if column not in columns:
                 await db.execute(f"ALTER TABLE bookings ADD COLUMN {column} {kind}")
@@ -304,6 +349,90 @@ async def restore_date(date_id: int) -> bool:
         return cur.rowcount > 0
 
 
+# ---------- ИТОГ ЭКЗАМЕНА ----------
+
+async def set_outcome(booking_id: int, outcome: str,
+                      admin_id: int, admin_name: str) -> bool:
+    """Проставляет итог. Переставить можно — пишем последнего, кто трогал."""
+    if outcome not in OUTCOMES:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """UPDATE bookings
+               SET outcome = ?, outcome_at = ?, outcome_by = ?, outcome_by_name = ?
+               WHERE id = ? AND status = ?""",
+            (outcome, _now(), admin_id, admin_name, booking_id, CONFIRMED),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_outcome_stats() -> dict:
+    """Итоги по экзаменам, которые уже прошли (подтверждённые заявки)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """SELECT b.outcome, COUNT(*)
+               FROM bookings b
+               JOIN exam_dates d ON d.id = b.date_id
+               WHERE b.status = ? AND d.exam_date IS NOT NULL AND d.exam_date < ?
+               GROUP BY b.outcome""",
+            (CONFIRMED, today().isoformat()),
+        )
+        by_outcome = {row[0]: row[1] for row in await cur.fetchall()}
+
+    passed = by_outcome.get(PASSED, 0)
+    failed = by_outcome.get(FAILED, 0)
+    no_show = by_outcome.get(NO_SHOW, 0)
+    marked = passed + failed + no_show
+    return {
+        "passed": passed,
+        "failed": failed,
+        "no_show": no_show,
+        "came": passed + failed,
+        "marked": marked,
+        "unmarked": by_outcome.get(None, 0),
+        "total": marked + by_outcome.get(None, 0),
+        # доля неявок считается от проставленных, иначе она врёт,
+        # пока часть заявок ещё без итога
+        "no_show_pct": round(no_show * 100 / marked) if marked else 0,
+    }
+
+
+# ---------- ВОРОНКА ----------
+
+async def log_event(user_id: int, step: str):
+    """Одно событие на шаг. Ошибку логирования глотаем: воронка не должна
+    ронять диалог с клиентом."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO events (user_id, step, created_at) VALUES (?, ?, ?)",
+                (user_id, step, _now()),
+            )
+            await db.commit()
+    except Exception as e:
+        print(f"[events] не записал {step} для {user_id}: {e}")
+
+
+def period_start(period: str) -> str:
+    """Граница периода в UTC, отсчитанная от полуночи по Ташкенту."""
+    days = {"today": 0, "week": 6, "month": 29}.get(period, 0)
+    start = datetime.combine(today() - timedelta(days=days), time.min, tzinfo=TZ)
+    return start.astimezone(timezone.utc).isoformat()
+
+
+async def get_funnel(period: str) -> list[tuple[str, str, int]]:
+    """[(step, подпись, сколько РАЗНЫХ человек дошло)] в порядке шагов."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """SELECT step, COUNT(DISTINCT user_id) FROM events
+               WHERE created_at >= ? GROUP BY step""",
+            (period_start(period),),
+        )
+        counts = {step: n for step, n in await cur.fetchall()}
+    return [(step, label, counts.get(step, 0)) for step, label in FUNNEL_STEPS]
+
+
 # ---------- НАПОМИНАНИЯ ----------
 
 async def get_bookings_to_remind(exam_date: str) -> list[tuple]:
@@ -366,6 +495,7 @@ async def has_active_booking(user_id: int) -> bool:
 async def create_booking(
     user_id: int, full_name: str, username: str, date_id: int,
     passport_file_id: str, receipt_file_id: str,
+    applicant_name: str | None = None,
 ) -> int | None:
     """None — на дате не осталось мест или её удалили.
 
@@ -399,10 +529,10 @@ async def create_booking(
             cur = await db.execute(
                 """INSERT INTO bookings
                    (user_id, full_name, username, date_id, passport_file_id,
-                    receipt_file_id, status, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    receipt_file_id, status, created_at, applicant_name)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (user_id, full_name, username, date_id, passport_file_id,
-                 receipt_file_id, PENDING, _now()),
+                 receipt_file_id, PENDING, _now(), applicant_name),
             )
             booking_id = cur.lastrowid
             await db.execute("COMMIT")
@@ -413,11 +543,12 @@ async def create_booking(
 
 
 async def get_bookings_for_date(date_id: int) -> list[tuple]:
-    """(id, full_name, username, user_id, status, confirmed_by_name, created_at)."""
+    """(id, full_name, username, user_id, status, confirmed_by_name, created_at,
+        outcome, applicant_name)."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """SELECT id, full_name, username, user_id, status,
-                      confirmed_by_name, created_at
+                      confirmed_by_name, created_at, outcome, applicant_name
                FROM bookings
                WHERE date_id = ?
                ORDER BY created_at, id""",
@@ -429,7 +560,8 @@ async def get_bookings_for_date(date_id: int) -> list[tuple]:
 async def get_booking(booking_id: int) -> tuple | None:
     """(id, user_id, full_name, username, date_id, status, confirmed_by_name,
         created_at, date_title, passport_file_id, receipt_file_id,
-        cancelled_by_name).
+        cancelled_by_name, exam_date, outcome, outcome_by_name, outcome_at,
+        applicant_name).
 
     Новые поля добавлены в конец, чтобы не ломать распаковку по индексам.
     """
@@ -437,7 +569,9 @@ async def get_booking(booking_id: int) -> tuple | None:
         cur = await db.execute(
             """SELECT b.id, b.user_id, b.full_name, b.username, b.date_id, b.status,
                       b.confirmed_by_name, b.created_at, d.title,
-                      b.passport_file_id, b.receipt_file_id, b.cancelled_by_name
+                      b.passport_file_id, b.receipt_file_id, b.cancelled_by_name,
+                      d.exam_date, b.outcome, b.outcome_by_name, b.outcome_at,
+                      b.applicant_name
                FROM bookings b
                LEFT JOIN exam_dates d ON d.id = b.date_id
                WHERE b.id = ?""",
@@ -530,11 +664,13 @@ async def get_stats() -> dict:
 
 
 async def get_export_rows() -> list[tuple]:
-    """(id, date_title, full_name, username, user_id, status, confirmed_by_name, created_at)."""
+    """(id, date_title, full_name, username, user_id, status, confirmed_by_name,
+        created_at, applicant_name, outcome)."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """SELECT b.id, d.title, b.full_name, b.username, b.user_id,
-                      b.status, b.confirmed_by_name, b.created_at
+                      b.status, b.confirmed_by_name, b.created_at,
+                      b.applicant_name, b.outcome
                FROM bookings b
                LEFT JOIN exam_dates d ON d.id = b.date_id
                ORDER BY d.exam_date IS NULL, d.exam_date, d.sort_order,

@@ -34,6 +34,13 @@ STATUS_TEXT = {
     db.CANCELLED: "отменена",
 }
 
+OUTCOME_ICON = {db.PASSED: "🎓", db.FAILED: "📕", db.NO_SHOW: "🚷"}
+OUTCOME_TEXT = {
+    db.PASSED: "явился и сдал",
+    db.FAILED: "явился, не сдал",
+    db.NO_SHOW: "не пришёл",
+}
+
 
 class IsAdmin(BaseFilter):
     async def __call__(self, event: Message | CallbackQuery) -> bool:
@@ -95,6 +102,7 @@ def menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📅 Даты", callback_data="a:dates")],
         [InlineKeyboardButton(text="👥 Записавшиеся", callback_data="a:bdates")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="a:stats")],
+        [InlineKeyboardButton(text="🔻 Воронка", callback_data="a:fn:today")],
         [InlineKeyboardButton(text="📥 Экспорт в Excel", callback_data="a:export")],
     ])
 
@@ -646,12 +654,15 @@ async def bookings_list(callback: CallbackQuery):
     chunk = bookings[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
 
     rows = []
-    for booking_id, full_name, username, _, status, _, _ in chunk:
+    for (booking_id, full_name, username, _, status, _, _, outcome, applicant_name) in chunk:
         icon = STATUS_ICON.get(status, "•")
-        name = full_name or (f"@{username}" if username else "без имени")
+        # если записывали друга, в кнопке важнее его имя, а не владельца аккаунта
+        name = applicant_name or full_name or (f"@{username}" if username else "без имени")
+        # у прошедших экзаменов сразу видно, кому итог ещё не проставили
+        mark = OUTCOME_ICON.get(outcome, "") if outcome else ""
         name = name[:24]
         rows.append([InlineKeyboardButton(
-            text=f"{icon} №{booking_id} · клиент: {name}",
+            text=f"{icon}{mark} №{booking_id} · клиент: {name}",
             callback_data=f"a:b:{booking_id}",
         )])
 
@@ -673,6 +684,7 @@ async def bookings_list(callback: CallbackQuery):
         f"Всего записей: {len(bookings)}"
         + (f"   ·   стр. {page + 1}/{pages}" if pages > 1 else "")
         + "\n\n✅ подтверждена   ⏳ ждёт   ❌ отменена"
+        + "\n🎓 сдал   📕 не сдал   🚷 не пришёл"
     )
 
     await show(callback, text, InlineKeyboardMarkup(inline_keyboard=rows))
@@ -686,19 +698,26 @@ async def render_booking_detail(callback: CallbackQuery, booking_id: int) -> boo
 
     (_, user_id, full_name, username, date_id, status,
      confirmed_by_name, created_at, date_title,
-     passport_file_id, receipt_file_id, cancelled_by_name) = row
+     passport_file_id, receipt_file_id, cancelled_by_name,
+     exam_date, outcome, outcome_by_name, outcome_at, applicant_name) = row
 
     lines = [
         f"Заявка №{booking_id}\n",
         f"Клиент: {full_name or '—'}"
         f"{' (@' + username + ')' if username else ''}",
         f"ID: {user_id}",
+        *([f"Записан: {applicant_name}"] if applicant_name else []),
         f"Дата экзамена: {date_title or '—'}",
         f"Статус: {STATUS_ICON.get(status, '•')} {STATUS_TEXT.get(status, status)}",
         f"Подтвердил: {confirmed_by_name or '—'}",
     ]
     if status == db.CANCELLED:
         lines.append(f"Отменил: {cancelled_by_name or '—'}")
+    if outcome:
+        lines.append(
+            f"Итог: {OUTCOME_ICON.get(outcome, '•')} {OUTCOME_TEXT.get(outcome, outcome)}"
+            f" ({outcome_by_name or '—'}, {fmt_dt(outcome_at)})"
+        )
     lines.append(f"Создана: {fmt_dt(created_at)}")
     text = "\n".join(lines)
 
@@ -707,6 +726,19 @@ async def render_booking_detail(callback: CallbackQuery, booking_id: int) -> boo
         rows.append([InlineKeyboardButton(
             text="📎 Документы", callback_data=f"a:bdoc:{booking_id}"
         )])
+
+    # итог проставляется только по подтверждённым заявкам и только после экзамена
+    if status == db.CONFIRMED and is_past(exam_date):
+        rows.append([InlineKeyboardButton(
+            text="🎓 Явился и сдал", callback_data=f"a:bo:{booking_id}:{db.PASSED}"
+        )])
+        rows.append([InlineKeyboardButton(
+            text="📕 Явился, не сдал", callback_data=f"a:bo:{booking_id}:{db.FAILED}"
+        )])
+        rows.append([InlineKeyboardButton(
+            text="🚷 Не пришёл", callback_data=f"a:bo:{booking_id}:{db.NO_SHOW}"
+        )])
+
     if status != db.CANCELLED:
         rows.append([InlineKeyboardButton(
             text="❌ Отменить запись", callback_data=f"a:bc:{booking_id}"
@@ -752,6 +784,32 @@ async def booking_documents(callback: CallbackQuery, bot: Bot):
         sent += 1
 
     await callback.answer("Отправил" if sent else "Документов нет")
+
+
+
+@router.callback_query(F.data.startswith("a:bo:"))
+async def booking_outcome(callback: CallbackQuery):
+    _, _, raw_id, outcome = callback.data.split(":")
+    booking_id = int(raw_id)
+
+    row = await db.get_booking(booking_id)
+    if not row:
+        await callback.answer("Заявка не найдена.", show_alert=True)
+        return
+    if not is_past(row[12]):
+        await callback.answer("Экзамен ещё не прошёл.", show_alert=True)
+        return
+
+    ok = await db.set_outcome(
+        booking_id, outcome, callback.from_user.id, callback.from_user.full_name
+    )
+    if not ok:
+        await callback.answer("Итог можно ставить только подтверждённым.", show_alert=True)
+        return
+
+    await db.log_event(row[1], db.STEP_OUTCOME)
+    await render_booking_detail(callback, booking_id)
+    await callback.answer(OUTCOME_TEXT.get(outcome, "Готово"))
 
 
 
@@ -828,6 +886,17 @@ async def stats(callback: CallbackQuery, state: FSMContext):
         f"❌ Отменено: {data['cancelled']}",
     ]
 
+    ex = await db.get_outcome_stats()
+    if ex['total']:
+        lines += [
+            "",
+            f"🎓 Прошедшие экзамены: {ex['total']}",
+            f"Явилось: {ex['came']}   ·   сдало: {ex['passed']}   ·   не сдало: {ex['failed']}",
+            f"Не пришло: {ex['no_show']}   ·   неявки: {ex['no_show_pct']}% от проставленных",
+        ]
+        if ex['unmarked']:
+            lines.append(f"Без итога: {ex['unmarked']} — их стоит проставить")
+
     if dates:
         lines += ["", "По датам:"]
         for _, title, seats_limit, is_active, confirmed, pending, _ in dates:
@@ -853,17 +922,21 @@ async def build_workbook() -> bytes:
 
     ws = wb.active
     ws.title = "Записи"
-    headers = ["№", "Дата экзамена", "ФИО", "Username", "Telegram ID",
-               "Статус", "Подтвердил", "Создана (Ташкент)"]
+    headers = ["№", "Дата экзамена", "Кого записали", "Аккаунт", "Username",
+               "Telegram ID", "Статус", "Итог", "Подтвердил", "Создана (Ташкент)"]
     ws.append(headers)
-    for booking_id, date_title, full_name, username, user_id, status, confirmed_by, created_at in rows:
+    for (booking_id, date_title, full_name, username, user_id, status,
+         confirmed_by, created_at, applicant_name, outcome) in rows:
         ws.append([
             booking_id,
             date_title or "—",
+            # с одного аккаунта могут записать друга — тогда это разные люди
+            applicant_name or full_name or "—",
             full_name or "—",
             f"@{username}" if username else "—",
             user_id,
             STATUS_TEXT.get(status, status),
+            OUTCOME_TEXT.get(outcome, "—"),
             confirmed_by or "—",
             fmt_dt(created_at),
         ])
@@ -897,6 +970,59 @@ async def build_workbook() -> bytes:
     buffer = BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+PERIOD_NAME = {"today": "сегодня", "week": "неделя", "month": "месяц"}
+
+
+@router.callback_query(F.data.startswith("a:fn:"))
+async def funnel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    period = callback.data.split(":")[2]
+    if period not in PERIOD_NAME:
+        period = "today"
+
+    steps = await db.get_funnel(period)
+    out = [f"🔻 Воронка · {PERIOD_NAME[period]}", ""]
+
+    counts = {step: count for step, _, count in steps}
+    started = counts.get(db.STEP_START, 0)
+    prev = None
+    for step, label, count in steps:
+        # процент от предыдущего шага показывает, где именно отваливаются
+        if prev is None:
+            share = "—"
+        elif prev == 0:
+            share = "0%"
+        else:
+            share = f"{round(count * 100 / prev)}%"
+        hint = "   ⏳" if step == db.STEP_OUTCOME else ""
+        out.append(f"{label}: {count}   ({share} от пред.){hint}")
+        prev = count
+
+    if started:
+        paid = counts.get(db.STEP_PAID, 0)
+        out += [
+            "",
+            f"Конверсия в оплату: {round(paid * 100 / started)}% от запустивших",
+            "",
+            "⏳ результат проставляется через недели, после самого экзамена —",
+            "в коротком периоде он почти всегда нулевой.",
+        ]
+    else:
+        out += ["", "За этот период событий нет."]
+
+    buttons = [InlineKeyboardButton(
+        text=("· " + name + " ·") if key == period else name,
+        callback_data=f"a:fn:{key}",
+    ) for key, name in PERIOD_NAME.items()]
+
+    await show(callback, "\n".join(out), InlineKeyboardMarkup(inline_keyboard=[
+        buttons,
+        [back_button("a:menu", "⬅️ В меню")],
+    ]))
+    await callback.answer()
+
 
 
 @router.callback_query(F.data == "a:export")

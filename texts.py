@@ -159,6 +159,25 @@ TEXTS: dict[str, dict[str, str]] = {
         UZ_CYRL: "Раҳмат! Чек қабул қилинди. ⏳\n\nАдминистратор тасдиқлашини кутинг.",
         UZ_LATN: "Rahmat! Chek qabul qilindi. ⏳\n\nAdministrator tasdiqlashini kuting.",
     },
+    "btn_add_more": {
+        RU: "➕ Записать ещё одного",
+        UZ_CYRL: "➕ Яна бирини ёздириш",
+        UZ_LATN: "➕ Yana birini yozdirish",
+    },
+    "ask_applicant_name": {
+        RU: (
+            "Кого записываем? 👤\n\n"
+            "Пришлите имя и фамилию человека — так, как в загранпаспорте."
+        ),
+        UZ_CYRL: (
+            "Кимни ёздирамиз? 👤\n\n"
+            "Ўша одамнинг исм-фамилиясини юборинг — чет эл паспортидагидек."
+        ),
+        UZ_LATN: (
+            "Kimni yozdiramiz? 👤\n\n"
+            "O'sha odamning ism-familiyasini yuboring — chet el pasportidagidek."
+        ),
+    },
     "payment_confirmed": {
         RU: (
             "Оплата подтверждена! ✅\n\n"
