@@ -505,15 +505,21 @@ TEXTS: dict[str, dict[str, str]] = {
     "faq_a_price": {
         RU: (
             "Запись на экзамен — 1 400 000 сум.\n\n"
-            "Оплата только полная, частями нельзя. Скидок нет."
+            "Оплата только полная.\n\n"
+            "Частями платить нельзя.\n\n"
+            "Скидок нет."
         ),
         UZ_CYRL: (
             "Имтиҳонга ёзилиш — 1 400 000 сўм.\n\n"
-            "Тўлов фақат тўлиқ, бўлиб тўлаш мумкин эмас. Чегирмалар йўқ."
+            "Тўлов фақат тўлиқ.\n\n"
+            "Бўлиб тўлаш мумкин эмас.\n\n"
+            "Чегирмалар йўқ."
         ),
         UZ_LATN: (
             "Imtihonga yozilish — 1 400 000 so'm.\n\n"
-            "To'lov faqat to'liq, bo'lib to'lash mumkin emas. Chegirmalar yo'q."
+            "To'lov faqat to'liq.\n\n"
+            "Bo'lib to'lash mumkin emas.\n\n"
+            "Chegirmalar yo'q."
         ),
     },
     "faq_q_how_pay": {
@@ -653,18 +659,21 @@ TEXTS: dict[str, dict[str, str]] = {
     "faq_a_when_issued": {
         RU: (
             "В день экзамена.\n\n"
-            "Результаты тестовой части — в обед, устной — около 16:00.\n\n"
+            "Результаты тестовой части — примерно в 13:00, "
+            "устной — примерно в 16:00.\n\n"
             "При успешной сдаче обеих частей сертификат выдают примерно к 18:00."
         ),
         UZ_CYRL: (
             "Имтиҳон кунида.\n\n"
-            "Тест қисми натижалари — тушда, оғзаки қисми — тахминан 16:00 да.\n\n"
+            "Тест қисми натижалари — тахминан 13:00 да, "
+            "оғзаки қисми — тахминан 16:00 да.\n\n"
             "Иккала қисм муваффақиятли топширилса, сертификат тахминан "
             "18:00 га берилади."
         ),
         UZ_LATN: (
             "Imtihon kunida.\n\n"
-            "Test qismi natijalari — tushda, og'zaki qismi — taxminan 16:00 da.\n\n"
+            "Test qismi natijalari — taxminan 13:00 da, "
+            "og'zaki qismi — taxminan 16:00 da.\n\n"
             "Ikkala qism muvaffaqiyatli topshirilsa, sertifikat taxminan "
             "18:00 ga beriladi."
         ),

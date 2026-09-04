@@ -69,6 +69,13 @@ def faq_button(lang: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=texts.t("btn_faq", lang), callback_data="faq")
 
 
+def signup_button(lang: str) -> InlineKeyboardButton:
+    """Ведёт туда же, куда «Продолжить»: к выбору даты."""
+    return InlineKeyboardButton(
+        text=texts.t("btn_signup", lang), callback_data="go:dates"
+    )
+
+
 def greeting_keyboard(lang: str) -> InlineKeyboardMarkup:
     """Приветствие: записаться или сперва почитать вопросы."""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -83,9 +90,7 @@ def fallback_keyboard(lang: str) -> InlineKeyboardMarkup:
     """Клиент написал что-то своё до начала записи."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [faq_button(lang)],
-        [InlineKeyboardButton(
-            text=texts.t("btn_signup", lang), callback_data="go:dates"
-        )],
+        [signup_button(lang)],
     ])
 
 
@@ -211,6 +216,7 @@ async def faq_section(callback: CallbackQuery, lang: str):
     rows.append([InlineKeyboardButton(
         text=texts.t("btn_back", lang), callback_data="faq"
     )])
+    rows.append([signup_button(lang)])
 
     await callback.message.answer(
         f"{texts.t(f'faq_sec_{sec}', lang)}\n\n{texts.t('faq_pick_question', lang)}",
@@ -230,13 +236,17 @@ async def faq_answer(callback: CallbackQuery, lang: str, bot: Bot):
     # какие вопросы читают чаще — видно в админке
     await db.log_event(callback.from_user.id, f"{FAQ_STEP_PREFIX}{qid}")
 
+    rows = [[InlineKeyboardButton(
+        text=texts.t("btn_back", lang), callback_data=f"faq:s:{sec}"
+    )]]
+    # «Задать вопрос менеджеру» — единственный ответ без кнопки записи:
+    # человек там просит живого человека, а не форму
+    if qid != texts.FAQ_MANAGER:
+        rows.append([signup_button(lang)])
+
     await callback.message.answer(
         f"{texts.t(f'faq_q_{qid}', lang)}\n\n{texts.t(f'faq_a_{qid}', lang)}",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(
-                text=texts.t("btn_back", lang), callback_data=f"faq:s:{sec}"
-            )
-        ]]),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await callback.answer()
 
