@@ -170,6 +170,12 @@ async def db_init():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS nudges (
                 user_id INTEGER PRIMARY KEY,
                 sent_at TEXT NOT NULL
@@ -469,6 +475,25 @@ async def get_outcome_stats() -> dict:
         # пока часть заявок ещё без итога
         "no_show_pct": round(no_show * 100 / marked) if marked else 0,
     }
+
+
+# ---------- СЛУЖЕБНЫЕ ОТМЕТКИ ----------
+
+async def get_meta(key: str) -> str | None:
+    async with _db() as db:
+        cur = await db.execute("SELECT value FROM meta WHERE key = ?", (key,))
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+
+async def set_meta(key: str, value: str):
+    async with _db() as db:
+        await db.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        await db.commit()
 
 
 # ---------- ВОЗВРАТ БРОШЕННЫХ ЗАПИСЕЙ ----------
