@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 from aiogram import Bot, F, Router
@@ -886,6 +886,37 @@ async def booking_cancel_do(callback: CallbackQuery, bot: Bot):
 
 # ---------- СТАТИСТИКА ----------
 
+def abandon_cutoff() -> str:
+    return (datetime.now(timezone.utc)
+            - timedelta(hours=reminders.ABANDON_AFTER_HOURS)).isoformat()
+
+
+@router.callback_query(F.data == "a:nudgeoff")
+async def suppress_nudges(callback: CallbackQuery, state: FSMContext):
+    """Помечает текущую очередь как уже написанную, ничего не отправляя.
+
+    Нужно перед первым запуском на живой базе: там накопились те, кто
+    заходил недели назад, и писать им всем разом незачем.
+    """
+    await state.clear()
+    n = await db.suppress_abandoned(abandon_cutoff())
+    if not n:
+        await callback.answer("Очередь и так пуста.", show_alert=True)
+        return
+
+    await callback.answer(f"Заглушено: {n}")
+    await callback.message.answer(
+        f"🔕 Помечено как отправленное: {n}\n\n"
+        "Этим людям сообщение о брошенной записи не уйдёт. "
+        "На тех, кто бросит запись начиная с сегодняшнего дня, это не влияет.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 К статистике", callback_data="a:stats")],
+            [back_button("a:menu", "⬅️ В меню")],
+        ]),
+    )
+
+
+
 # ---------- ПОИСК КЛИЕНТА ----------
 
 @router.callback_query(F.data == "a:sr")
@@ -1074,6 +1105,10 @@ async def stats(callback: CallbackQuery, state: FSMContext):
             f"вернулись и записались {nd['returned']} ({nd['pct']}%)",
         ]
 
+    queued = await db.count_abandoned(abandon_cutoff())
+    if queued:
+        lines.append(f"В очереди на возврат сейчас: {queued}")
+
     top = await db.get_top_referrers(5)
     if top:
         lines += ["", "🤝 Кто больше приводит:"]
@@ -1090,6 +1125,7 @@ async def stats(callback: CallbackQuery, state: FSMContext):
             lines.append(f"• {title}{mark}: {seats}  ✅{confirmed} ⏳{pending}")
 
     await show(callback, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔕 Заглушить очередь возврата",  callback_data="a:nudgeoff")],
         [InlineKeyboardButton(text="📥 Экспорт в Excel", callback_data="a:export")],
         [back_button("a:menu", "⬅️ В меню")],
     ]))

@@ -580,6 +580,29 @@ async def get_abandoned_users(cutoff: str) -> list[int]:
         return [row[0] for row in await cur.fetchall()]
 
 
+async def count_abandoned(cutoff: str) -> int:
+    """Сколько человек сейчас в очереди на возврат."""
+    return len(await get_abandoned_users(cutoff))
+
+
+async def suppress_abandoned(cutoff: str) -> int:
+    """Помечает всю текущую очередь как уже написанную, ничего не отправляя.
+
+    Нужно перед первым запуском на живой базе: там накопились те, кто
+    заходил давно, и разом писать им всем незачем.
+    """
+    users = await get_abandoned_users(cutoff)
+    if not users:
+        return 0
+    async with _db() as db:
+        await db.executemany(
+            "INSERT OR IGNORE INTO nudges (user_id, sent_at) VALUES (?, ?)",
+            [(user_id, _now()) for user_id in users],
+        )
+        await db.commit()
+    return len(users)
+
+
 async def mark_nudged(user_id: int):
     async with _db() as db:
         await db.execute(
