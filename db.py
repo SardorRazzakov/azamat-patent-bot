@@ -750,6 +750,18 @@ def period_start(period: str) -> str:
     return start.astimezone(timezone.utc).isoformat()
 
 
+async def get_top_faq(period: str, limit: int = 10) -> list[tuple[str, int]]:
+    """[(id вопроса, сколько разных людей открыло)] по убыванию."""
+    async with _db() as db:
+        cur = await db.execute(
+            """SELECT step, COUNT(DISTINCT user_id) FROM events
+               WHERE created_at >= ? AND step LIKE 'faq:%'
+               GROUP BY step ORDER BY 2 DESC LIMIT ?""",
+            (period_start(period), limit),
+        )
+        return [(step.split(":", 1)[1], n) for step, n in await cur.fetchall()]
+
+
 async def get_funnel(period: str) -> list[tuple[str, str, int]]:
     """[(step, подпись, сколько РАЗНЫХ человек дошло)] в порядке шагов."""
     async with _db() as db:

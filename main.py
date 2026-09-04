@@ -12,11 +12,23 @@ from reminders import reminder_loop
 from storage import SQLiteStorage
 
 
-async def set_admin_commands(bot: Bot):
+async def set_commands(bot: Bot):
+    # видно всем клиентам
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Начать / сменить язык"),
+            BotCommand(command="faq", description="Частые вопросы"),
+        ])
+    except Exception as e:
+        print(f"[commands] не удалось задать общие команды: {e}")
+
+    # админам — свои, поверх общих
     for admin_id in config.ADMIN_IDS:
         try:
             await bot.set_my_commands(
                 [
+                    BotCommand(command="start", description="Начать / сменить язык"),
+                    BotCommand(command="faq", description="Частые вопросы"),
                     BotCommand(command="admin", description="Админ-панель"),
                     BotCommand(command="cancel", description="Отменить текущее действие"),
                 ],
@@ -35,7 +47,7 @@ async def main():
     bot = Bot(token=config.TOKEN)
     dp = Dispatcher(storage=SQLiteStorage())
     handlers.setup(dp)
-    await set_admin_commands(bot)
+    await set_commands(bot)
 
     # фоновая рассылка напоминаний за день до экзамена
     asyncio.create_task(reminder_loop(bot))

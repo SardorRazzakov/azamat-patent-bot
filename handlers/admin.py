@@ -1240,6 +1240,14 @@ async def funnel(callback: CallbackQuery, state: FSMContext):
     else:
         out += ["", "За этот период событий нет."]
 
+    top_faq = await db.get_top_faq(period)
+    if top_faq:
+        out += ["", "❓ Что чаще всего читают:"]
+        for qid, n in top_faq:
+            # подпись берём русскую: админка не переводится
+            label = texts.t(f"faq_q_{qid}", texts.RU)
+            out.append(f"• {label}: {n}")
+
     buttons = [InlineKeyboardButton(
         text=("· " + name + " ·") if key == period else name,
         callback_data=f"a:fn:{key}",

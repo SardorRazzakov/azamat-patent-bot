@@ -292,21 +292,479 @@ TEXTS: dict[str, dict[str, str]] = {
     "fallback": {
         RU: (
             "Не понял вас. 🤔\n\n"
-            "Нажмите кнопку ниже, чтобы продолжить, "
-            "или отправьте /start, чтобы начать заново."
+            "Посмотрите частые вопросы или начните запись — кнопки ниже."
         ),
         UZ_CYRL: (
             "Тушунмадим. 🤔\n\n"
-            "Давом этиш учун қуйидаги тугмани босинг "
-            "ёки қайта бошлаш учун /start юборинг."
+            "Кўп сўраладиган саволларни кўринг ёки ёзилишни бошланг — "
+            "тугмалар қуйида."
         ),
         UZ_LATN: (
             "Tushunmadim. 🤔\n\n"
-            "Davom etish uchun quyidagi tugmani bosing "
-            "yoki qaytadan boshlash uchun /start yuboring."
+            "Ko'p so'raladigan savollarni ko'ring yoki yozilishni boshlang — "
+            "tugmalar quyida."
+        ),
+    },
+    # ---------- FAQ ----------
+    # Разделы и порядок вопросов заданы в FAQ_SECTIONS ниже.
+    "btn_faq": {
+        RU: "❓ Частые вопросы",
+        UZ_CYRL: "❓ Кўп сўраладиган саволлар",
+        UZ_LATN: "❓ Ko'p so'raladigan savollar",
+    },
+    "btn_signup": {
+        RU: "📝 Записаться",
+        UZ_CYRL: "📝 Ёзилиш",
+        UZ_LATN: "📝 Yozilish",
+    },
+    "btn_back": {
+        RU: "⬅️ Назад",
+        UZ_CYRL: "⬅️ Орқага",
+        UZ_LATN: "⬅️ Orqaga",
+    },
+    "faq_title": {
+        RU: "❓ Частые вопросы\n\nВыберите раздел:",
+        UZ_CYRL: "❓ Кўп сўраладиган саволлар\n\nБўлимни танланг:",
+        UZ_LATN: "❓ Ko'p so'raladigan savollar\n\nBo'limni tanlang:",
+    },
+    "faq_pick_question": {
+        RU: "Выберите вопрос:",
+        UZ_CYRL: "Саволни танланг:",
+        UZ_LATN: "Savolni tanlang:",
+    },
+    # Строка-подсказка внутри записи: кнопку там не показываем, чтобы не
+    # сбивать клиента с шага, но про раздел напоминаем.
+    "faq_hint": {
+        RU: "Есть вопросы? Отправьте /faq",
+        UZ_CYRL: "Саволингиз борми? /faq юборинг",
+        UZ_LATN: "Savolingiz bormi? /faq yuboring",
+    },
+
+    "faq_sec_exam": {
+        RU: "📕 Об экзамене",
+        UZ_CYRL: "📕 Имтиҳон ҳақида",
+        UZ_LATN: "📕 Imtihon haqida",
+    },
+    "faq_sec_pay": {
+        RU: "💳 Оплата и обучение",
+        UZ_CYRL: "💳 Тўлов ва ўқиш",
+        UZ_LATN: "💳 To'lov va o'qish",
+    },
+    "faq_sec_cert": {
+        RU: "📄 Сертификат",
+        UZ_CYRL: "📄 Сертификат",
+        UZ_LATN: "📄 Sertifikat",
+    },
+    "faq_sec_other": {
+        RU: "🗂 Другое",
+        UZ_CYRL: "🗂 Бошқа саволлар",
+        UZ_LATN: "🗂 Boshqa savollar",
+    },
+
+    # --- Об экзамене ---
+    "faq_q_dates": {
+        RU: "Даты и время",
+        UZ_CYRL: "Сана ва вақт",
+        UZ_LATN: "Sana va vaqt",
+    },
+    "faq_a_dates": {
+        RU: (
+            "Экзамен проходит по понедельникам, средам и пятницам. "
+            "Начало в 9:00.\n\n"
+            "Актуальные свободные даты вы увидите при записи."
+        ),
+        UZ_CYRL: (
+            "Имтиҳон душанба, чоршанба ва жума кунлари ўтказилади. "
+            "Бошланиши соат 9:00 да.\n\n"
+            "Бўш саналарни ёзилиш пайтида кўрасиз."
+        ),
+        UZ_LATN: (
+            "Imtihon dushanba, chorshanba va juma kunlari o'tkaziladi. "
+            "Boshlanishi soat 9:00 da.\n\n"
+            "Bo'sh sanalarni yozilish paytida ko'rasiz."
+        ),
+    },
+    "faq_q_address": {
+        RU: "Адрес",
+        UZ_CYRL: "Манзил",
+        UZ_LATN: "Manzil",
+    },
+    "faq_a_address": {
+        RU: (
+            "г. Ташкент, ул. Паркентская, 331.\n\n"
+            "Ориентир — напротив метро Яшнабад."
+        ),
+        UZ_CYRL: (
+            "Тошкент шаҳри, Паркент кўчаси, 331-уй.\n\n"
+            "Мўлжал — Яшнобод метроси рўпараси."
+        ),
+        UZ_LATN: (
+            "Toshkent shahri, Parkent ko'chasi, 331-uy.\n\n"
+            "Mo'ljal — Yashnobod metrosi ro'parasi."
+        ),
+    },
+    "faq_q_bring": {
+        RU: "Что взять с собой",
+        UZ_CYRL: "Ўзингиз билан нима олиш керак",
+        UZ_LATN: "O'zingiz bilan nima olish kerak",
+    },
+    "faq_a_bring": {
+        RU: (
+            "Только оригинал загранпаспорта. Без оригинала на экзамен "
+            "не допускают.\n\n"
+            "Опаздывать нельзя — опоздавших также не допускают.\n\n"
+            "В обоих случаях деньги не возвращаются, записаться можно "
+            "на другой день с полной оплатой."
+        ),
+        UZ_CYRL: (
+            "Фақат чет эл паспортининг асл нусхаси. Асл нусхасиз "
+            "имтиҳонга киритилмайди.\n\n"
+            "Кечикиш мумкин эмас — кечиккканлар ҳам киритилмайди.\n\n"
+            "Иккала ҳолатда ҳам пул қайтарилмайди, бошқа кунга тўлиқ "
+            "тўлов билан ёзилиш мумкин."
+        ),
+        UZ_LATN: (
+            "Faqat chet el pasportining asl nusxasi. Asl nusxasiz "
+            "imtihonga kiritilmaydi.\n\n"
+            "Kechikish mumkin emas — kechikkanlar ham kiritilmaydi.\n\n"
+            "Ikkala holatda ham pul qaytarilmaydi, boshqa kunga to'liq "
+            "to'lov bilan yozilish mumkin."
+        ),
+    },
+    "faq_q_duration": {
+        RU: "Сколько длится",
+        UZ_CYRL: "Қанча давом этади",
+        UZ_LATN: "Qancha davom etadi",
+    },
+    "faq_a_duration": {
+        RU: (
+            "90 минут.\n\n"
+            "Экзамен состоит из двух частей: тестовой и устной."
+        ),
+        UZ_CYRL: (
+            "90 дақиқа.\n\n"
+            "Имтиҳон икки қисмдан иборат: тест ва оғзаки."
+        ),
+        UZ_LATN: (
+            "90 daqiqa.\n\n"
+            "Imtihon ikki qismdan iborat: test va og'zaki."
+        ),
+    },
+    "faq_q_online": {
+        RU: "Можно ли сдать онлайн",
+        UZ_CYRL: "Онлайн топширса бўладими",
+        UZ_LATN: "Onlayn topshirsa bo'ladimi",
+    },
+    "faq_a_online": {
+        RU: (
+            "Нет. Экзамен сдаётся только лично, в Ташкенте "
+            "по адресу ул. Паркентская, 331."
+        ),
+        UZ_CYRL: (
+            "Йўқ. Имтиҳон фақат шахсан, Тошкентда Паркент кўчаси "
+            "331-уй манзилида топширилади."
+        ),
+        UZ_LATN: (
+            "Yo'q. Imtihon faqat shaxsan, Toshkentda Parkent ko'chasi "
+            "331-uy manzilida topshiriladi."
+        ),
+    },
+    "faq_q_failed": {
+        RU: "Что если не сдал",
+        UZ_CYRL: "Топшира олмасам нима бўлади",
+        UZ_LATN: "Topshira olmasam nima bo'ladi",
+    },
+    "faq_a_failed": {
+        RU: (
+            "Пересдача возможна в другой свободный день, "
+            "не в день экзамена.\n\n"
+            "Пересдаётся весь экзамен целиком — обе части, даже если одна "
+            "была сдана успешно.\n\n"
+            "Пересдача платная, по полной стоимости."
+        ),
+        UZ_CYRL: (
+            "Қайта топшириш бошқа бўш кунда мумкин, имтиҳон кунида эмас.\n\n"
+            "Имтиҳон тўлиқ қайта топширилади — иккала қисм ҳам, "
+            "биттаси муваффақиятли топширилган бўлса ҳам.\n\n"
+            "Қайта топшириш пулли, тўлиқ нархда."
+        ),
+        UZ_LATN: (
+            "Qayta topshirish boshqa bo'sh kunda mumkin, imtihon kunida emas.\n\n"
+            "Imtihon to'liq qayta topshiriladi — ikkala qism ham, "
+            "bittasi muvaffaqiyatli topshirilgan bo'lsa ham.\n\n"
+            "Qayta topshirish pulli, to'liq narxda."
+        ),
+    },
+
+    # --- Оплата и обучение ---
+    "faq_q_price": {
+        RU: "Сколько стоит",
+        UZ_CYRL: "Нархи қанча",
+        UZ_LATN: "Narxi qancha",
+    },
+    "faq_a_price": {
+        RU: (
+            "Запись на экзамен — 1 400 000 сум.\n\n"
+            "Оплата только полная, частями нельзя. Скидок нет."
+        ),
+        UZ_CYRL: (
+            "Имтиҳонга ёзилиш — 1 400 000 сўм.\n\n"
+            "Тўлов фақат тўлиқ, бўлиб тўлаш мумкин эмас. Чегирмалар йўқ."
+        ),
+        UZ_LATN: (
+            "Imtihonga yozilish — 1 400 000 so'm.\n\n"
+            "To'lov faqat to'liq, bo'lib to'lash mumkin emas. Chegirmalar yo'q."
+        ),
+    },
+    "faq_q_how_pay": {
+        RU: "Как оплатить",
+        UZ_CYRL: "Қандай тўлаш керак",
+        UZ_LATN: "Qanday to'lash kerak",
+    },
+    "faq_a_how_pay": {
+        RU: (
+            "Ссылки на оплату через Payme или Click бот пришлёт "
+            "автоматически после выбора даты.\n\n"
+            "После оплаты отправьте скриншот чека."
+        ),
+        UZ_CYRL: (
+            "Payme ёки Click орқали тўлов ҳаволаларини сана танлангандан "
+            "сўнг бот автоматик юборади.\n\n"
+            "Тўловдан кейин чек скриншотини юборинг."
+        ),
+        UZ_LATN: (
+            "Payme yoki Click orqali to'lov havolalarini sana tanlangandan "
+            "so'ng bot avtomatik yuboradi.\n\n"
+            "To'lovdan keyin chek skrinshotini yuboring."
+        ),
+    },
+    "faq_q_refund": {
+        RU: "Возврат",
+        UZ_CYRL: "Пулни қайтариш",
+        UZ_LATN: "Pulni qaytarish",
+    },
+    "faq_a_refund": {
+        RU: "Возврат возможен, если предупредить минимум за 2 дня до экзамена.",
+        UZ_CYRL: (
+            "Пулни қайтариш имтиҳондан камида 2 кун олдин огоҳлантирилса мумкин."
+        ),
+        UZ_LATN: (
+            "Pulni qaytarish imtihondan kamida 2 kun oldin ogohlantirilsa mumkin."
+        ),
+    },
+    "faq_q_training": {
+        RU: "Обучение",
+        UZ_CYRL: "Ўқув курслари",
+        UZ_LATN: "O'quv kurslari",
+    },
+    "faq_a_training": {
+        RU: (
+            "Подготовка проводится в Ташкенте и в г. Хазарасп "
+            "(Хорезмская область).\n\n"
+            "100 000 сум за день, занятия с 9:30 до 17:00.\n\n"
+            "Например, запись плюс 2 дня обучения — 1 600 000 сум."
+        ),
+        UZ_CYRL: (
+            "Тайёргарлик Тошкентда ва Хазорасп шаҳрида "
+            "(Хоразм вилояти) ўтказилади.\n\n"
+            "Кунига 100 000 сўм, дарслар соат 9:30 дан 17:00 гача.\n\n"
+            "Масалан, ёзилиш ва 2 кунлик ўқиш — 1 600 000 сўм."
+        ),
+        UZ_LATN: (
+            "Tayyorgarlik Toshkentda va Xazarasp shahrida "
+            "(Xorazm viloyati) o'tkaziladi.\n\n"
+            "Kuniga 100 000 so'm, darslar soat 9:30 dan 17:00 gacha.\n\n"
+            "Masalan, yozilish va 2 kunlik o'qish — 1 600 000 so'm."
+        ),
+    },
+    "faq_q_housing": {
+        RU: "Проживание",
+        UZ_CYRL: "Яшаш жойи",
+        UZ_LATN: "Yashash joyi",
+    },
+    "faq_a_housing": {
+        RU: (
+            "Для приезжих из других регионов есть партнёрские хостелы, "
+            "60 000 сум за ночь.\n\n"
+            "Скажите менеджеру, если нужно место."
+        ),
+        UZ_CYRL: (
+            "Бошқа вилоятлардан келганлар учун ҳамкор хостеллар бор, "
+            "бир кечага 60 000 сўм.\n\n"
+            "Жой керак бўлса, менежерга айтинг."
+        ),
+        UZ_LATN: (
+            "Boshqa viloyatlardan kelganlar uchun hamkor xostellar bor, "
+            "bir kechaga 60 000 so'm.\n\n"
+            "Joy kerak bo'lsa, menejerga ayting."
+        ),
+    },
+
+    # --- Сертификат ---
+    "faq_q_patent": {
+        RU: "Подходит ли для патента",
+        UZ_CYRL: "Патент учун тўғри келадими",
+        UZ_LATN: "Patent uchun to'g'ri keladimi",
+    },
+    "faq_a_patent": {
+        RU: "Да. Сертификат предназначен именно для оформления трудового патента.",
+        UZ_CYRL: (
+            "Ҳа. Сертификат айнан меҳнат патентини расмийлаштириш учун мўлжалланган."
+        ),
+        UZ_LATN: (
+            "Ha. Sertifikat aynan mehnat patentini rasmiylashtirish uchun mo'ljallangan."
+        ),
+    },
+    "faq_q_residence": {
+        RU: "Подходит ли для ВНЖ и гражданства",
+        UZ_CYRL: "ВНЖ ва фуқаролик учун тўғри келадими",
+        UZ_LATN: "VNJ va fuqarolik uchun to'g'ri keladimi",
+    },
+    "faq_a_residence": {
+        RU: "Нет. Для ВНЖ и гражданства этот сертификат не подходит.",
+        UZ_CYRL: "Йўқ. ВНЖ ва фуқаролик учун бу сертификат тўғри келмайди.",
+        UZ_LATN: "Yo'q. VNJ va fuqarolik uchun bu sertifikat to'g'ri kelmaydi.",
+    },
+    "faq_q_where": {
+        RU: "Где признаётся",
+        UZ_CYRL: "Қаерда тан олинади",
+        UZ_LATN: "Qayerda tan olinadi",
+    },
+    "faq_a_where": {
+        RU: "Сертификат признаётся на всей территории Российской Федерации.",
+        UZ_CYRL: "Сертификат Россия Федерациясининг бутун ҳудудида тан олинади.",
+        UZ_LATN: "Sertifikat Rossiya Federatsiyasining butun hududida tan olinadi.",
+    },
+    "faq_q_validity": {
+        RU: "Срок действия",
+        UZ_CYRL: "Амал қилиш муддати",
+        UZ_LATN: "Amal qilish muddati",
+    },
+    "faq_a_validity": {
+        RU: "3 года с даты сдачи экзамена.",
+        UZ_CYRL: "Имтиҳон топширилган кундан бошлаб 3 йил.",
+        UZ_LATN: "Imtihon topshirilgan kundan boshlab 3 yil.",
+    },
+    "faq_q_when_issued": {
+        RU: "Когда выдают",
+        UZ_CYRL: "Қачон берилади",
+        UZ_LATN: "Qachon beriladi",
+    },
+    "faq_a_when_issued": {
+        RU: (
+            "В день экзамена.\n\n"
+            "Результаты тестовой части — в обед, устной — около 16:00.\n\n"
+            "При успешной сдаче обеих частей сертификат выдают примерно к 18:00."
+        ),
+        UZ_CYRL: (
+            "Имтиҳон кунида.\n\n"
+            "Тест қисми натижалари — тушда, оғзаки қисми — тахминан 16:00 да.\n\n"
+            "Иккала қисм муваффақиятли топширилса, сертификат тахминан "
+            "18:00 га берилади."
+        ),
+        UZ_LATN: (
+            "Imtihon kunida.\n\n"
+            "Test qismi natijalari — tushda, og'zaki qismi — taxminan 16:00 da.\n\n"
+            "Ikkala qism muvaffaqiyatli topshirilsa, sertifikat taxminan "
+            "18:00 ga beriladi."
+        ),
+    },
+
+    # --- Другое ---
+    "faq_q_documents": {
+        RU: "Какие документы нужны",
+        UZ_CYRL: "Қандай ҳужжатлар керак",
+        UZ_LATN: "Qanday hujjatlar kerak",
+    },
+    "faq_a_documents": {
+        RU: (
+            "Только фото загранпаспорта и чек об оплате.\n\n"
+            "Больше ничего не требуется."
+        ),
+        UZ_CYRL: (
+            "Фақат чет эл паспорти расми ва тўлов чеки.\n\n"
+            "Бошқа ҳеч нарса талаб қилинмайди."
+        ),
+        UZ_LATN: (
+            "Faqat chet el pasporti rasmi va to'lov cheki.\n\n"
+            "Boshqa hech narsa talab qilinmaydi."
+        ),
+    },
+    "faq_q_friend": {
+        RU: "Можно ли записать друга",
+        UZ_CYRL: "Дўстимни ёздирсам бўладими",
+        UZ_LATN: "Do'stimni yozdirsam bo'ladimi",
+    },
+    "faq_a_friend": {
+        RU: (
+            "Да. С одного аккаунта можно оформить несколько записей.\n\n"
+            "Для каждого человека нужен свой паспорт."
+        ),
+        UZ_CYRL: (
+            "Ҳа. Бир аккаунтдан бир нечта ёзилишни расмийлаштириш мумкин.\n\n"
+            "Ҳар бир одам учун ўз паспорти керак."
+        ),
+        UZ_LATN: (
+            "Ha. Bir akkauntdan bir nechta yozilishni rasmiylashtirish mumkin.\n\n"
+            "Har bir odam uchun o'z pasporti kerak."
+        ),
+    },
+    "faq_q_buy": {
+        RU: "Можно ли купить без экзамена",
+        UZ_CYRL: "Имтиҳонсиз сотиб олса бўладими",
+        UZ_LATN: "Imtihonsiz sotib olsa bo'ladimi",
+    },
+    "faq_a_buy": {
+        RU: (
+            "Нет. Такой возможности не существует.\n\n"
+            "Сертификат выдаётся только после личной сдачи экзамена."
+        ),
+        UZ_CYRL: (
+            "Йўқ. Бундай имконият мавжуд эмас.\n\n"
+            "Сертификат фақат шахсан имтиҳон топширилгандан кейин берилади."
+        ),
+        UZ_LATN: (
+            "Yo'q. Bunday imkoniyat mavjud emas.\n\n"
+            "Sertifikat faqat shaxsan imtihon topshirilgandan keyin beriladi."
+        ),
+    },
+    "faq_q_manager": {
+        RU: "Задать вопрос менеджеру",
+        UZ_CYRL: "Менежерга савол бериш",
+        UZ_LATN: "Menejerga savol berish",
+    },
+    "faq_a_manager": {
+        RU: (
+            "Напишите нашим менеджерам: @Izzatsiddikov или @sardorrazzakoff.\n\n"
+            "Они ответят на любой вопрос."
+        ),
+        UZ_CYRL: (
+            "Менежерларимизга ёзинг: @Izzatsiddikov ёки @sardorrazzakoff.\n\n"
+            "Улар ҳар қандай саволга жавоб беради."
+        ),
+        UZ_LATN: (
+            "Menejerlarimizga yozing: @Izzatsiddikov yoki @sardorrazzakoff.\n\n"
+            "Ular har qanday savolga javob beradi."
         ),
     },
 }
+
+
+# Разделы FAQ и порядок вопросов внутри. Ключи собираются как
+# faq_q_<id> для кнопки и faq_a_<id> для ответа.
+FAQ_SECTIONS = (
+    ("exam", ("dates", "address", "bring", "duration", "online", "failed")),
+    ("pay", ("price", "how_pay", "refund", "training", "housing")),
+    ("cert", ("patent", "residence", "where", "validity", "when_issued")),
+    ("other", ("documents", "friend", "buy", "manager")),
+)
+
+# id вопроса -> id раздела, чтобы «Назад» знала, куда возвращать
+FAQ_PARENT = {q: sec for sec, qs in FAQ_SECTIONS for q in qs}
+
+# Нажатие на этот вопрос дополнительно уведомляет администраторов
+FAQ_MANAGER = "manager"
+
 
 
 def lang_or_default(lang: str | None) -> str:

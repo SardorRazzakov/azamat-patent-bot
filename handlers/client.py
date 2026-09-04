@@ -3,7 +3,7 @@ from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandObject, CommandStart, StateFilter
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -65,6 +65,31 @@ def continue_keyboard(lang: str) -> InlineKeyboardMarkup:
     ]])
 
 
+def faq_button(lang: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=texts.t("btn_faq", lang), callback_data="faq")
+
+
+def greeting_keyboard(lang: str) -> InlineKeyboardMarkup:
+    """Приветствие: записаться или сперва почитать вопросы."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=texts.t("btn_continue", lang), callback_data="go:dates"
+        )],
+        [faq_button(lang)],
+    ])
+
+
+def fallback_keyboard(lang: str) -> InlineKeyboardMarkup:
+    """Клиент написал что-то своё до начала записи."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [faq_button(lang)],
+        [InlineKeyboardButton(
+            text=texts.t("btn_signup", lang), callback_data="go:dates"
+        )],
+    ])
+
+
+
 def add_more_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
@@ -91,6 +116,10 @@ def done_keyboard(admin_name: str) -> InlineKeyboardMarkup:
 # ---------- ВЫБОР ЯЗЫКА ----------
 
 REFERRAL_PREFIX = "ref_"
+
+# События FAQ в воронку: открытие раздела и конкретные вопросы
+FAQ_OPEN_STEP = "faq_open"
+FAQ_STEP_PREFIX = "faq:"
 
 
 @router.message(CommandStart())
@@ -128,9 +157,107 @@ async def language_chosen(callback: CallbackQuery, state: FSMContext):
         )
 
     await callback.message.answer(
-        texts.t("greeting", code), reply_markup=continue_keyboard(code)
+        texts.t("greeting", code), reply_markup=greeting_keyboard(code)
     )
     await callback.answer()
+
+
+# ---------- ЧАСТЫЕ ВОПРОСЫ ----------
+# Состояние здесь намеренно не трогаем: клиент может заглянуть в вопросы
+# посреди записи и вернуться на свой шаг.
+
+def faq_sections_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=texts.t(f"faq_sec_{sec}", lang), callback_data=f"faq:s:{sec}"
+        )]
+        for sec, _ in texts.FAQ_SECTIONS
+    ])
+
+
+async def show_faq_root(message: Message, lang: str):
+    await message.answer(
+        texts.t("faq_title", lang), reply_markup=faq_sections_keyboard(lang)
+    )
+
+
+@router.message(Command("faq"))
+async def faq_command(message: Message, lang: str):
+    await db.log_event(message.from_user.id, FAQ_OPEN_STEP)
+    await show_faq_root(message, lang)
+
+
+@router.callback_query(F.data == "faq")
+async def faq_root(callback: CallbackQuery, lang: str):
+    await db.log_event(callback.from_user.id, FAQ_OPEN_STEP)
+    await show_faq_root(callback.message, lang)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("faq:s:"))
+async def faq_section(callback: CallbackQuery, lang: str):
+    sec = callback.data.split(":")[2]
+    questions = dict(texts.FAQ_SECTIONS).get(sec)
+    if not questions:
+        await callback.answer()
+        return
+
+    rows = [
+        [InlineKeyboardButton(
+            text=texts.t(f"faq_q_{q}", lang), callback_data=f"faq:q:{q}"
+        )]
+        for q in questions
+    ]
+    rows.append([InlineKeyboardButton(
+        text=texts.t("btn_back", lang), callback_data="faq"
+    )])
+
+    await callback.message.answer(
+        f"{texts.t(f'faq_sec_{sec}', lang)}\n\n{texts.t('faq_pick_question', lang)}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("faq:q:"))
+async def faq_answer(callback: CallbackQuery, lang: str, bot: Bot):
+    qid = callback.data.split(":")[2]
+    sec = texts.FAQ_PARENT.get(qid)
+    if not sec:
+        await callback.answer()
+        return
+
+    # какие вопросы читают чаще — видно в админке
+    await db.log_event(callback.from_user.id, f"{FAQ_STEP_PREFIX}{qid}")
+
+    await callback.message.answer(
+        f"{texts.t(f'faq_q_{qid}', lang)}\n\n{texts.t(f'faq_a_{qid}', lang)}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=texts.t("btn_back", lang), callback_data=f"faq:s:{sec}"
+            )
+        ]]),
+    )
+    await callback.answer()
+
+    if qid == texts.FAQ_MANAGER:
+        await notify_admins_about_question(bot, callback.from_user)
+
+
+async def notify_admins_about_question(bot: Bot, user):
+    """Клиент нажал «Задать вопрос менеджеру» — пусть админы знают заранее."""
+    text = (
+        f"❓ Клиент просит связаться\n\n"
+        f"Имя: {user.full_name}"
+        f"{' (@' + user.username + ')' if user.username else ''}\n"
+        f"ID: {user.id}"
+    )
+    for admin_id in config.ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, text)
+        except Exception as e:
+            print(f"[admins] не доставлено админу {admin_id}: {e}")
+
 
 
 # ---------- ЗАПИСЬ НА ЭКЗАМЕН ----------
@@ -175,7 +302,7 @@ async def add_more_start(callback: CallbackQuery, state: FSMContext, lang: str):
     await callback.answer()
 
 
-@router.message(StateFilter(ExamFlow.waiting_applicant), F.text)
+@router.message(StateFilter(ExamFlow.waiting_applicant), F.text & ~F.text.startswith("/"))
 async def applicant_name_received(message: Message, state: FSMContext, lang: str):
     name = message.text.strip()
     if not name:
@@ -347,18 +474,25 @@ async def confirm_payment(callback: CallbackQuery, bot: Bot):
 # ---------- ПОДСКАЗКИ НА НЕОЖИДАННЫЙ ВВОД ----------
 # Идут последними: перехватывают всё, что не разобрали хендлеры выше.
 
+
+def with_faq_hint(text: str, lang: str) -> str:
+    """Внутри записи кнопку FAQ не показываем, чтобы не сбивать клиента
+    с шага, но про раздел напоминаем отдельной строкой."""
+    return f"{text}\n\n{texts.t('faq_hint', lang)}"
+
+
 @router.message(StateFilter(ExamFlow.waiting_passport))
 async def passport_expected(message: Message, lang: str):
-    await message.answer(texts.t("need_passport", lang))
+    await message.answer(with_faq_hint(texts.t("need_passport", lang), lang))
 
 
 @router.message(StateFilter(ExamFlow.waiting_receipt))
 async def receipt_expected(message: Message, lang: str):
-    await message.answer(texts.t("need_receipt", lang))
+    await message.answer(with_faq_hint(texts.t("need_receipt", lang), lang))
 
 
 @router.message()
 async def unexpected_message(message: Message, lang: str):
     await message.answer(
-        texts.t("fallback", lang), reply_markup=continue_keyboard(lang)
+        texts.t("fallback", lang), reply_markup=fallback_keyboard(lang)
     )
