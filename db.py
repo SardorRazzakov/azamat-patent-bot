@@ -72,6 +72,10 @@ def today() -> date:
 # реплика одна, а открытие файла и разбор схемы на каждый чих — самая
 # дорогая часть при сотнях пользователей.
 
+def _pylower(value):
+    return value.lower() if isinstance(value, str) else value
+
+
 _conn: aiosqlite.Connection | None = None
 _conn_lock = asyncio.Lock()
 
@@ -99,6 +103,10 @@ async def connect() -> aiosqlite.Connection:
                 # транзакция и только при аварии самой машины.
                 await conn.execute("PRAGMA synchronous=NORMAL")
                 await conn.execute("PRAGMA foreign_keys=ON")
+                # Родной LOWER() в SQLite складывает регистр только у
+                # латиницы: «алишер» не нашёл бы «Алишер». Питоновский
+                # lower() знает про кириллицу.
+                await conn.create_function("pylower", 1, _pylower, deterministic=True)
                 _conn = conn
     return _conn
 
@@ -426,6 +434,60 @@ async def restore_date(date_id: int) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+
+
+# ---------- ПОИСК ----------
+
+async def search_bookings(query: str, limit: int = 20) -> list[tuple]:
+    """(id, full_name, applicant_name, username, user_id, status, date_title).
+
+    Ищем по имени владельца аккаунта, по имени записанного, по username и по
+    числовому id — админ обычно помнит что-то одно из этого.
+    """
+    query = (query or "").strip().lstrip("@")
+    if not query:
+        return []
+
+    like = f"%{query.lower()}%"
+    params = [like, like, like]
+    numeric = ""
+    if query.isdigit():
+        # число может быть и Telegram ID, и номером заявки
+        numeric = " OR b.user_id = ? OR b.id = ?"
+        params += [int(query), int(query)]
+
+    async with _db() as db:
+        cur = await db.execute(
+            f"""SELECT b.id, b.full_name, b.applicant_name, b.username,
+                       b.user_id, b.status, d.title
+                FROM bookings b
+                LEFT JOIN exam_dates d ON d.id = b.date_id
+                WHERE pylower(b.full_name) LIKE ?
+                   OR pylower(b.applicant_name) LIKE ?
+                   OR pylower(b.username) LIKE ?
+                   {numeric}
+                ORDER BY b.id DESC
+                LIMIT ?""",
+            (*params, limit),
+        )
+        return await cur.fetchall()
+
+
+# ---------- РАССЫЛКА ПО ДАТЕ ----------
+
+async def get_date_recipients(date_id: int) -> list[int]:
+    """Уникальные аккаунты с действующей заявкой на дату.
+
+    Именно аккаунты, а не заявки: с одного аккаунта могли записать друзей,
+    и слать один и тот же текст туда трижды незачем.
+    """
+    async with _db() as db:
+        cur = await db.execute(
+            """SELECT DISTINCT user_id FROM bookings
+               WHERE date_id = ? AND status IN (?, ?)""",
+            (date_id, PENDING, CONFIRMED),
+        )
+        return [row[0] for row in await cur.fetchall()]
 
 
 # ---------- ИТОГ ЭКЗАМЕНА ----------

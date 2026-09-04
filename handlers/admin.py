@@ -20,6 +20,7 @@ from openpyxl.utils import get_column_letter
 
 import config
 import db
+import reminders
 import texts
 
 PAGE_SIZE = 8
@@ -61,6 +62,8 @@ class AdminFlow(StatesGroup):
     date_value = State()
     date_value_edit = State()
     dates_bulk = State()
+    search_query = State()
+    broadcast_text = State()
 
 
 # ---------- ХЕЛПЕРЫ ----------
@@ -102,6 +105,7 @@ def menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Даты", callback_data="a:dates")],
         [InlineKeyboardButton(text="👥 Записавшиеся", callback_data="a:bdates")],
+        [InlineKeyboardButton(text="🔎 Поиск клиента", callback_data="a:sr")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="a:stats")],
         [InlineKeyboardButton(text="🔻 Воронка", callback_data="a:fn:today")],
         [InlineKeyboardButton(text="📥 Экспорт в Excel", callback_data="a:export")],
@@ -250,6 +254,9 @@ async def render_date_detail(callback: CallbackQuery, date_id: int) -> bool:
     rows = [
         [InlineKeyboardButton(
             text="👥 Записавшиеся", callback_data=f"a:bk:{date_id}:0"
+        )],
+        [InlineKeyboardButton(
+            text="📢 Написать всем", callback_data=f"a:bcast:{date_id}"
         )],
         [InlineKeyboardButton(
             text="📆 Изменить дату", callback_data=f"a:ddate:{date_id}"
@@ -878,6 +885,159 @@ async def booking_cancel_do(callback: CallbackQuery, bot: Bot):
 
 
 # ---------- СТАТИСТИКА ----------
+
+# ---------- ПОИСК КЛИЕНТА ----------
+
+@router.callback_query(F.data == "a:sr")
+async def search_start(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminFlow.search_query)
+    await show(
+        callback,
+        "🔎 Поиск клиента\n\n"
+        "Пришлите имя, username или Telegram ID.\n"
+        "Подойдёт и часть имени — например «Иван».\n\n"
+        "/cancel — отмена",
+        InlineKeyboardMarkup(inline_keyboard=[[back_button("a:menu", "⬅️ В меню")]]),
+    )
+    await callback.answer()
+
+
+@router.message(AdminFlow.search_query, PLAIN_TEXT)
+async def search_apply(message: Message, state: FSMContext):
+    query = message.text.strip()
+    found = await db.search_bookings(query)
+    await state.clear()
+
+    if not found:
+        await message.answer(
+            f"По запросу «{query}» ничего не нашлось.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔎 Искать ещё", callback_data="a:sr")],
+                [back_button("a:menu", "⬅️ В меню")],
+            ]),
+        )
+        return
+
+    rows = []
+    for booking_id, full_name, applicant_name, username, user_id, status, title in found:
+        icon = STATUS_ICON.get(status, "•")
+        who = (applicant_name or full_name or (f"@{username}" if username else str(user_id)))
+        rows.append([InlineKeyboardButton(
+            text=f"{icon} №{booking_id} · {who[:22]} · {title or '—'}",
+            callback_data=f"a:b:{booking_id}",
+        )])
+    rows.append([InlineKeyboardButton(text="🔎 Искать ещё", callback_data="a:sr")])
+    rows.append([back_button("a:menu", "⬅️ В меню")])
+
+    await message.answer(
+        f"🔎 «{query}» — найдено заявок: {len(found)}\n\n"
+        "Показаны последние. Откройте любую, чтобы увидеть карточку.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+# ---------- РАССЫЛКА ЗАПИСАВШИМСЯ НА ДАТУ ----------
+
+@router.callback_query(F.data.startswith("a:bcast:"))
+async def broadcast_start(callback: CallbackQuery, state: FSMContext):
+    date_id = int(callback.data.split(":")[2])
+    row = await db.get_date_overview(date_id)
+    if not row:
+        await callback.answer("Дата не найдена.", show_alert=True)
+        return
+
+    recipients = await db.get_date_recipients(date_id)
+    if not recipients:
+        await callback.answer("На эту дату никто не записан.", show_alert=True)
+        return
+
+    await state.set_state(AdminFlow.broadcast_text)
+    await state.update_data(date_id=date_id)
+    await show(
+        callback,
+        f"📢 Рассылка · {row[1]}\n\n"
+        f"Получателей: {len(recipients)}\n\n"
+        "Пришлите текст сообщения. Он уйдёт как есть, без перевода — "
+        f"пишите так, чтобы поняли все.\n\n"
+        "/cancel — отмена",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [back_button(f"a:d:{date_id}", "⬅️ Отмена")]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(AdminFlow.broadcast_text, PLAIN_TEXT)
+async def broadcast_preview(message: Message, state: FSMContext):
+    text = message.text.strip()
+    if not text:
+        await message.answer("Пустое сообщение отправлять не будем.")
+        return
+
+    data = await state.get_data()
+    date_id = data["date_id"]
+    recipients = await db.get_date_recipients(date_id)
+    row = await db.get_date_overview(date_id)
+    await state.update_data(text=text)
+
+    await message.answer(
+        f"📢 Проверьте перед отправкой\n\n"
+        f"Дата: {row[1] if row else date_id}\n"
+        f"Получателей: {len(recipients)}\n"
+        f"{'—' * 20}\n"
+        f"{text}\n"
+        f"{'—' * 20}\n\n"
+        "Отправить?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"📢 Да, отправить ({len(recipients)})",
+                callback_data=f"a:bcast1:{date_id}",
+            )],
+            [back_button(f"a:d:{date_id}", "⬅️ Отмена")],
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith("a:bcast1:"))
+async def broadcast_send(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    text = data.get("text")
+    date_id = int(callback.data.split(":")[2])
+    await state.clear()
+
+    if not text:
+        await callback.answer("Текст потерялся, начните заново.", show_alert=True)
+        return
+
+    await callback.answer("Отправляю…")
+    recipients = await db.get_date_recipients(date_id)
+
+    sent = blocked = failed = 0
+    for user_id in recipients:
+        # те же правила, что и в фоновых рассылках: пауза и разбор 429
+        result = await reminders.deliver(bot, user_id, text)
+        if result == reminders.SENT:
+            sent += 1
+        elif result == reminders.BLOCKED:
+            blocked += 1
+        else:
+            failed += 1
+        await asyncio.sleep(reminders.SEND_PAUSE)
+
+    report = [f"📢 Рассылка завершена\n", f"Доставлено: {sent}"]
+    if blocked:
+        report.append(f"Заблокировали бота: {blocked}")
+    if failed:
+        report.append(f"Не удалось (сеть или лимит): {failed}")
+    await callback.message.answer(
+        "\n".join(report),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📅 К дате", callback_data=f"a:d:{date_id}")],
+            [back_button("a:menu", "⬅️ В меню")],
+        ]),
+    )
+
+
 
 @router.callback_query(F.data == "a:stats")
 async def stats(callback: CallbackQuery, state: FSMContext):
