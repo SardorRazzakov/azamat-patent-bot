@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from io import BytesIO
 
@@ -938,9 +939,17 @@ async def stats(callback: CallbackQuery, state: FSMContext):
 # ---------- ЭКСПОРТ ----------
 
 async def build_workbook() -> bytes:
+    """Сборку книги уносим в поток: openpyxl считает синхронно, и на паре
+    сотен строк это заметно подвешивает event loop — бот в это время не
+    отвечает никому."""
     rows = await db.get_export_rows()
     dates = await db.get_dates_overview()
+    return await asyncio.get_running_loop().run_in_executor(
+        None, _render_workbook, rows, dates
+    )
 
+
+def _render_workbook(rows: list[tuple], dates: list[tuple]) -> bytes:
     wb = Workbook()
 
     ws = wb.active

@@ -6,6 +6,7 @@ from aiogram.types import BotCommand, BotCommandScopeChat
 
 import config
 import handlers
+import db
 from db import db_init
 from reminders import reminder_loop
 from storage import SQLiteStorage
@@ -32,14 +33,17 @@ async def main():
     await db_init()
 
     bot = Bot(token=config.TOKEN)
-    dp = Dispatcher(storage=SQLiteStorage(config.DB_PATH))
+    dp = Dispatcher(storage=SQLiteStorage())
     handlers.setup(dp)
     await set_admin_commands(bot)
 
     # фоновая рассылка напоминаний за день до экзамена
     asyncio.create_task(reminder_loop(bot))
 
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await db.close()
 
 
 if __name__ == "__main__":

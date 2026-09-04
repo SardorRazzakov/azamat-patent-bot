@@ -10,9 +10,10 @@ Railway ронял клиентов посреди записи: прислав�
 
 import json
 
-import aiosqlite
 from aiogram.fsm.state import State
 from aiogram.fsm.storage.base import BaseStorage, StateType, StorageKey
+
+from db import session
 
 
 def _key(key: StorageKey) -> str:
@@ -28,28 +29,28 @@ _CLEANUP = """
 
 
 class SQLiteStorage(BaseStorage):
-    def __init__(self, path: str):
-        self.path = path
+    def __init__(self):
+        pass
 
     async def set_state(self, key: StorageKey, state: StateType = None) -> None:
         value = state.state if isinstance(state, State) else state
-        async with aiosqlite.connect(self.path) as db:
+        async with session() as conn:
             if value is None:
-                await db.execute(
+                await conn.execute(
                     "UPDATE fsm_storage SET state = NULL WHERE key = ?", (_key(key),)
                 )
-                await db.execute(_CLEANUP, (_key(key),))
+                await conn.execute(_CLEANUP, (_key(key),))
             else:
-                await db.execute(
+                await conn.execute(
                     """INSERT INTO fsm_storage (key, state, data) VALUES (?, ?, '{}')
                        ON CONFLICT(key) DO UPDATE SET state = excluded.state""",
                     (_key(key), value),
                 )
-            await db.commit()
+            await conn.commit()
 
     async def get_state(self, key: StorageKey) -> str | None:
-        async with aiosqlite.connect(self.path) as db:
-            cur = await db.execute(
+        async with session() as conn:
+            cur = await conn.execute(
                 "SELECT state FROM fsm_storage WHERE key = ?", (_key(key),)
             )
             row = await cur.fetchone()
@@ -57,18 +58,18 @@ class SQLiteStorage(BaseStorage):
 
     async def set_data(self, key: StorageKey, data) -> None:
         payload = json.dumps(dict(data), ensure_ascii=False)
-        async with aiosqlite.connect(self.path) as db:
-            await db.execute(
+        async with session() as conn:
+            await conn.execute(
                 """INSERT INTO fsm_storage (key, state, data) VALUES (?, NULL, ?)
                    ON CONFLICT(key) DO UPDATE SET data = excluded.data""",
                 (_key(key), payload),
             )
-            await db.execute(_CLEANUP, (_key(key),))
-            await db.commit()
+            await conn.execute(_CLEANUP, (_key(key),))
+            await conn.commit()
 
     async def get_data(self, key: StorageKey) -> dict:
-        async with aiosqlite.connect(self.path) as db:
-            cur = await db.execute(
+        async with session() as conn:
+            cur = await conn.execute(
                 "SELECT data FROM fsm_storage WHERE key = ?", (_key(key),)
             )
             row = await cur.fetchone()

@@ -1,4 +1,6 @@
+import asyncio
 import sqlite3
+from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timedelta, timezone
 
 import aiosqlite
@@ -65,6 +67,59 @@ def today() -> date:
     return datetime.now(TZ).date()
 
 
+# ---------- СОЕДИНЕНИЕ ----------
+# Одно долгоживущее соединение на процесс вместо нового на каждый запрос:
+# реплика одна, а открытие файла и разбор схемы на каждый чих — самая
+# дорогая часть при сотнях пользователей.
+
+_conn: aiosqlite.Connection | None = None
+_conn_lock = asyncio.Lock()
+
+# Транзакции create_booking() идут через тот же коннект, что и остальные
+# запросы, поэтому их надо развести явно — иначе чужая вставка попадёт
+# внутрь чужого BEGIN IMMEDIATE.
+_tx_lock = asyncio.Lock()
+
+
+async def connect() -> aiosqlite.Connection:
+    global _conn
+    if _conn is None:
+        async with _conn_lock:
+            if _conn is None:                       # проверка после ожидания
+                conn = aiosqlite.connect(DB_PATH, isolation_level=None)
+                # поток соединения не должен держать процесс живым, если
+                # close() забыли вызвать — иначе скрипт не завершится
+                conn.daemon = True
+                conn = await conn
+                # WAL: читатели не блокируют писателя и наоборот.
+                await conn.execute("PRAGMA journal_mode=WAL")
+                # Ждать освободившуюся блокировку, а не падать сразу.
+                await conn.execute("PRAGMA busy_timeout=5000")
+                # NORMAL достаточно: при WAL потеряется максимум последняя
+                # транзакция и только при аварии самой машины.
+                await conn.execute("PRAGMA synchronous=NORMAL")
+                await conn.execute("PRAGMA foreign_keys=ON")
+                _conn = conn
+    return _conn
+
+
+@asynccontextmanager
+async def _db():
+    """Общий коннект в том же виде, в каком раньше был свой на запрос."""
+    yield await connect()
+
+
+# то же самое для соседних модулей
+session = _db
+
+
+async def close():
+    global _conn
+    if _conn is not None:
+        await _conn.close()
+        _conn = None
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -72,7 +127,7 @@ def _now() -> str:
 # ---------- ИНИЦИАЛИЗАЦИЯ ----------
 
 async def db_init():
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS exam_dates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -211,7 +266,7 @@ async def db_init():
 
 async def get_bookable_dates() -> list[tuple[int, str]]:
     """Активные даты, на которых ещё есть места (seats_limit = 0 — без лимита)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """
             SELECT d.id, d.title
@@ -230,7 +285,7 @@ async def get_bookable_dates() -> list[tuple[int, str]]:
 
 
 async def is_date_bookable(date_id: int) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """
             SELECT d.seats_limit, COUNT(b.id)
@@ -251,7 +306,7 @@ async def is_date_bookable(date_id: int) -> bool:
 
 
 async def get_date_title(date_id: int) -> str:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute("SELECT title FROM exam_dates WHERE id = ?", (date_id,))
         row = await cur.fetchone()
         return row[0] if row else "не указана"
@@ -261,7 +316,7 @@ async def get_date_title(date_id: int) -> str:
 
 async def get_dates_overview() -> list[tuple]:
     """Все даты: (id, title, seats_limit, is_active, confirmed, pending)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """
             SELECT d.id, d.title, d.seats_limit, d.is_active,
@@ -278,7 +333,7 @@ async def get_dates_overview() -> list[tuple]:
 
 
 async def get_date_overview(date_id: int) -> tuple | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """
             SELECT d.id, d.title, d.seats_limit, d.is_active,
@@ -298,7 +353,7 @@ async def get_date_overview(date_id: int) -> tuple | None:
 async def add_date(title: str, seats_limit: int = 0,
                    exam_date: str | None = None) -> int | None:
     """Возвращает id новой даты или None, если такая дата уже есть."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM exam_dates")
         (sort_order,) = await cur.fetchone()
         try:
@@ -315,7 +370,7 @@ async def add_date(title: str, seats_limit: int = 0,
 
 async def rename_date(date_id: int, title: str) -> str:
     """'ok' — переименована, 'duplicate' — название занято, 'missing' — даты нет."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         try:
             cur = await db.execute(
                 "UPDATE exam_dates SET title = ? WHERE id = ?", (title, date_id)
@@ -327,7 +382,7 @@ async def rename_date(date_id: int, title: str) -> str:
 
 
 async def set_exam_date(date_id: int, exam_date: str | None) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             "UPDATE exam_dates SET exam_date = ? WHERE id = ?", (exam_date, date_id)
         )
@@ -336,7 +391,7 @@ async def set_exam_date(date_id: int, exam_date: str | None) -> bool:
 
 
 async def set_date_limit(date_id: int, seats_limit: int) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             "UPDATE exam_dates SET seats_limit = ? WHERE id = ?", (seats_limit, date_id)
         )
@@ -346,7 +401,7 @@ async def set_date_limit(date_id: int, seats_limit: int) -> bool:
 
 async def delete_date(date_id: int) -> str:
     """Удаляет дату. Если по ней уже есть заявки — прячет её из списка ('archived')."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute("SELECT COUNT(*) FROM bookings WHERE date_id = ?", (date_id,))
         (bookings_count,) = await cur.fetchone()
         if bookings_count:
@@ -359,7 +414,7 @@ async def delete_date(date_id: int) -> str:
 
 
 async def restore_date(date_id: int) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             "UPDATE exam_dates SET is_active = 1 WHERE id = ?", (date_id,)
         )
@@ -374,7 +429,7 @@ async def set_outcome(booking_id: int, outcome: str,
     """Проставляет итог. Переставить можно — пишем последнего, кто трогал."""
     if outcome not in OUTCOMES:
         return False
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """UPDATE bookings
                SET outcome = ?, outcome_at = ?, outcome_by = ?, outcome_by_name = ?
@@ -387,7 +442,7 @@ async def set_outcome(booking_id: int, outcome: str,
 
 async def get_outcome_stats() -> dict:
     """Итоги по экзаменам, которые уже прошли (подтверждённые заявки)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """SELECT b.outcome, COUNT(*)
                FROM bookings b
@@ -424,7 +479,7 @@ async def get_abandoned_users(cutoff: str) -> list[int]:
     Наличие любой заявки (в том числе отменённой) значит, что запись доведена до
     конца — таким не пишем. Один раз на человека: строка в nudges.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """SELECT e.user_id
                FROM events e
@@ -439,7 +494,7 @@ async def get_abandoned_users(cutoff: str) -> list[int]:
 
 
 async def mark_nudged(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(
             "INSERT OR IGNORE INTO nudges (user_id, sent_at) VALUES (?, ?)",
             (user_id, _now()),
@@ -449,7 +504,7 @@ async def mark_nudged(user_id: int):
 
 async def get_nudge_stats() -> dict:
     """Сколько написали и сколько из них после этого записались."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute("SELECT COUNT(*) FROM nudges")
         (sent,) = await cur.fetchone()
         cur = await db.execute(
@@ -469,7 +524,7 @@ async def get_nudge_stats() -> dict:
 
 async def get_client_name(user_id: int) -> str | None:
     """Имя из последней заявки — единственное место, где оно у нас есть."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             "SELECT full_name FROM bookings WHERE user_id = ? ORDER BY id DESC LIMIT 1",
             (user_id,),
@@ -482,7 +537,7 @@ async def add_referral(user_id: int, referrer_id: int) -> bool:
     """Пишем только при первом запуске и только чужую ссылку."""
     if user_id == referrer_id:
         return False
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             "INSERT OR IGNORE INTO referrals (user_id, referrer_id, created_at) "
             "VALUES (?, ?, ?)",
@@ -493,7 +548,7 @@ async def add_referral(user_id: int, referrer_id: int) -> bool:
 
 
 async def get_referrer(user_id: int) -> int | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             "SELECT referrer_id FROM referrals WHERE user_id = ?", (user_id,)
         )
@@ -503,7 +558,7 @@ async def get_referrer(user_id: int) -> int | None:
 
 async def get_top_referrers(limit: int = 10) -> list[tuple]:
     """(referrer_id, имя, приведено, из них дошли до оплаты)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """SELECT r.referrer_id,
                       (SELECT b.full_name FROM bookings b
@@ -536,7 +591,7 @@ async def get_cert_renewals(today_iso: str) -> list[tuple]:
     Провалившим и не пришедшим не пишем: сертификата у них нет. Заявки без
     проставленного итога включаем — админы часто не успевают их отметить.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             f"""SELECT b.id, b.user_id, d.exam_date
                 FROM bookings b
@@ -554,7 +609,7 @@ async def get_cert_renewals(today_iso: str) -> list[tuple]:
 
 
 async def mark_cert_reminded(booking_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(
             "UPDATE bookings SET cert_reminder_sent_at = ? WHERE id = ?",
             (_now(), booking_id),
@@ -568,7 +623,7 @@ async def log_event(user_id: int, step: str):
     """Одно событие на шаг. Ошибку логирования глотаем: воронка не должна
     ронять диалог с клиентом."""
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _db() as db:
             await db.execute(
                 "INSERT INTO events (user_id, step, created_at) VALUES (?, ?, ?)",
                 (user_id, step, _now()),
@@ -587,7 +642,7 @@ def period_start(period: str) -> str:
 
 async def get_funnel(period: str) -> list[tuple[str, str, int]]:
     """[(step, подпись, сколько РАЗНЫХ человек дошло)] в порядке шагов."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """SELECT step, COUNT(DISTINCT user_id) FROM events
                WHERE created_at >= ? GROUP BY step""",
@@ -602,7 +657,7 @@ async def get_funnel(period: str) -> list[tuple[str, str, int]]:
 async def get_bookings_to_remind(exam_date: str) -> list[tuple]:
     """Подтверждённые заявки на дату exam_date, которым ещё не напоминали.
     Возвращает (booking_id, user_id, date_title)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """SELECT b.id, b.user_id, d.title
                FROM bookings b
@@ -616,7 +671,7 @@ async def get_bookings_to_remind(exam_date: str) -> list[tuple]:
 
 
 async def mark_reminded(booking_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(
             "UPDATE bookings SET reminder_sent_at = ? WHERE id = ?",
             (_now(), booking_id),
@@ -628,14 +683,28 @@ async def mark_reminded(booking_id: int):
 
 async def get_user_lang(user_id: int) -> str | None:
     """None — клиент ещё не выбирал язык."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute("SELECT lang FROM users WHERE user_id = ?", (user_id,))
         row = await cur.fetchone()
         return row[0] if row else None
 
 
+async def get_user_langs(user_ids: list[int]) -> dict[int, str]:
+    """Языки пачкой: в рассылках получателей сотни, и запрос на каждого
+    из них — это сотни обращений к базе в одном цикле."""
+    if not user_ids:
+        return {}
+    async with _db() as db:
+        marks = ",".join("?" * len(user_ids))
+        cur = await db.execute(
+            f"SELECT user_id, lang FROM users WHERE user_id IN ({marks})",
+            tuple(user_ids),
+        )
+        return {row[0]: row[1] for row in await cur.fetchall()}
+
+
 async def set_user_lang(user_id: int, lang: str):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(
             """INSERT INTO users (user_id, lang, updated_at) VALUES (?, ?, ?)
                ON CONFLICT(user_id) DO UPDATE SET
@@ -648,7 +717,7 @@ async def set_user_lang(user_id: int, lang: str):
 # ---------- ЗАЯВКИ ----------
 
 async def has_active_booking(user_id: int) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             "SELECT 1 FROM bookings WHERE user_id = ? AND status IN ('pending','confirmed')",
             (user_id,),
@@ -666,7 +735,7 @@ async def create_booking(
     Проверка лимита и вставка идут в одной транзакции: иначе двое клиентов
     успевают пройти is_date_bookable() и оба занимают последнее место.
     """
-    async with aiosqlite.connect(DB_PATH, isolation_level=None) as db:
+    async with _tx_lock, _db() as db:
         await db.execute("BEGIN IMMEDIATE")
         try:
             cur = await db.execute(
@@ -709,7 +778,7 @@ async def create_booking(
 async def get_bookings_for_date(date_id: int) -> list[tuple]:
     """(id, full_name, username, user_id, status, confirmed_by_name, created_at,
         outcome, applicant_name)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """SELECT id, full_name, username, user_id, status,
                       confirmed_by_name, created_at, outcome, applicant_name
@@ -729,7 +798,7 @@ async def get_booking(booking_id: int) -> tuple | None:
 
     Новые поля добавлены в конец, чтобы не ломать распаковку по индексам.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """SELECT b.id, b.user_id, b.full_name, b.username, b.date_id, b.status,
                       b.confirmed_by_name, b.created_at, d.title,
@@ -748,7 +817,7 @@ async def cancel_booking(
     booking_id: int, admin_id: int, admin_name: str
 ) -> tuple[bool, int | None]:
     """Возвращает (была ли отменена сейчас, user_id клиента)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """UPDATE bookings
                SET status = ?, cancelled_by = ?, cancelled_by_name = ?
@@ -765,7 +834,7 @@ async def cancel_booking(
 
 async def claim_booking(booking_id: int, admin_id: int, admin_name: str):
     """Возвращает (успех, user_id, имя_подтвердившего)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """UPDATE bookings
                SET status = 'confirmed', confirmed_by = ?, confirmed_by_name = ?
@@ -788,7 +857,7 @@ async def claim_booking(booking_id: int, admin_id: int, admin_name: str):
 # ---------- СООБЩЕНИЯ АДМИНАМ ----------
 
 async def save_admin_message(booking_id: int, admin_id: int, message_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(
             "INSERT OR REPLACE INTO admin_messages VALUES (?, ?, ?)",
             (booking_id, admin_id, message_id),
@@ -797,7 +866,7 @@ async def save_admin_message(booking_id: int, admin_id: int, message_id: int):
 
 
 async def get_admin_messages(booking_id: int) -> list[tuple[int, int]]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             "SELECT admin_id, message_id FROM admin_messages WHERE booking_id = ?",
             (booking_id,),
@@ -808,7 +877,7 @@ async def get_admin_messages(booking_id: int) -> list[tuple[int, int]]:
 # ---------- СТАТИСТИКА И ЭКСПОРТ ----------
 
 async def get_stats() -> dict:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute("SELECT status, COUNT(*) FROM bookings GROUP BY status")
         by_status = {status: count for status, count in await cur.fetchall()}
 
@@ -830,7 +899,7 @@ async def get_stats() -> dict:
 async def get_export_rows() -> list[tuple]:
     """(id, date_title, full_name, username, user_id, status, confirmed_by_name,
         created_at, applicant_name, outcome)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             """SELECT b.id, d.title, b.full_name, b.username, b.user_id,
                       b.status, b.confirmed_by_name, b.created_at,

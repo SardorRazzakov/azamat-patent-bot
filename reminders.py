@@ -37,10 +37,11 @@ async def send_due_reminders(bot: Bot) -> int:
     """Шлёт напоминания на завтрашние экзамены. Возвращает число отправленных."""
     tomorrow = (db.today() + timedelta(days=1)).isoformat()
     due = await db.get_bookings_to_remind(tomorrow)
+    langs = await db.get_user_langs([user_id for _, user_id, _ in due])
 
     sent = 0
     for booking_id, user_id, title in due:
-        lang = texts.lang_or_default(await db.get_user_lang(user_id))
+        lang = texts.lang_or_default(langs.get(user_id))
         try:
             await bot.send_message(
                 user_id, texts.t("exam_reminder", lang, title=title)
@@ -82,10 +83,11 @@ async def send_abandoned_nudges(bot: Bot) -> int:
     cutoff = (datetime.now(timezone.utc)
               - timedelta(hours=ABANDON_AFTER_HOURS)).isoformat()
     users = await db.get_abandoned_users(cutoff)
+    langs = await db.get_user_langs(users)
 
     sent = 0
     for user_id in users:
-        lang = texts.lang_or_default(await db.get_user_lang(user_id))
+        lang = texts.lang_or_default(langs.get(user_id))
         try:
             await bot.send_message(
                 user_id,
@@ -107,10 +109,11 @@ async def send_cert_renewals(bot: Bot) -> int:
     """Напоминание тем, у кого сертификат истекает меньше чем через два месяца."""
     today_iso = db.today().isoformat()
     due = await db.get_cert_renewals(today_iso)
+    langs = await db.get_user_langs([user_id for _, user_id, _ in due])
 
     sent = 0
     for booking_id, user_id, exam_date in due:
-        lang = texts.lang_or_default(await db.get_user_lang(user_id))
+        lang = texts.lang_or_default(langs.get(user_id))
         exam = date.fromisoformat(exam_date)
         try:
             expires = exam.replace(year=exam.year + db.CERT_YEARS)
