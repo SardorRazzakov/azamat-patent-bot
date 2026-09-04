@@ -43,8 +43,6 @@ CLICK_LINK = "https://indoor.click.uz/pay?id=0105991&t=0"
 EXAM_LOCATION_LAT = 41.29872833124857
 EXAM_LOCATION_LON = 69.34990462234283
 
-GREETING_VOICE = "greeting.ogg"
-
 
 def validate():
     if not TOKEN:

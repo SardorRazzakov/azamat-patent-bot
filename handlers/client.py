@@ -8,7 +8,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
-    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -131,10 +130,6 @@ async def language_chosen(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         texts.t("greeting", code), reply_markup=continue_keyboard(code)
     )
-    # дорожка записана только на узбекском: русскоязычному клиенту она
-    # звучит чужеродно, вторую запишем позже
-    if code != texts.RU:
-        await callback.message.answer_voice(FSInputFile(config.GREETING_VOICE))
     await callback.answer()
 
 
