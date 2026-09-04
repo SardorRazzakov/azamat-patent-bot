@@ -4,8 +4,9 @@ MemoryStorage держит состояние в памяти процесса, 
 Railway ронял клиентов посреди записи: приславший паспорт человек после
 перезапуска оказывался в пустоте. Здесь состояние переживает рестарт.
 
-Реплика одна, объёмы маленькие — отдельное соединение на операцию
-дешевле, чем возня с блокировками общего.
+Пишем через db.writer(): INSERT и следующий за ним CLEANUP должны лечь
+одной непрерывной последовательностью, иначе на await между ними в общий
+коннект успевает влезть чужая транзакция. Чтения идут через session().
 """
 
 import json
@@ -13,7 +14,7 @@ import json
 from aiogram.fsm.state import State
 from aiogram.fsm.storage.base import BaseStorage, StateType, StorageKey
 
-from db import session
+from db import session, writer
 
 
 def _key(key: StorageKey) -> str:
@@ -34,7 +35,7 @@ class SQLiteStorage(BaseStorage):
 
     async def set_state(self, key: StorageKey, state: StateType = None) -> None:
         value = state.state if isinstance(state, State) else state
-        async with session() as conn:
+        async with writer() as conn:
             if value is None:
                 await conn.execute(
                     "UPDATE fsm_storage SET state = NULL WHERE key = ?", (_key(key),)
@@ -58,7 +59,7 @@ class SQLiteStorage(BaseStorage):
 
     async def set_data(self, key: StorageKey, data) -> None:
         payload = json.dumps(dict(data), ensure_ascii=False)
-        async with session() as conn:
+        async with writer() as conn:
             await conn.execute(
                 """INSERT INTO fsm_storage (key, state, data) VALUES (?, NULL, ?)
                    ON CONFLICT(key) DO UPDATE SET data = excluded.data""",

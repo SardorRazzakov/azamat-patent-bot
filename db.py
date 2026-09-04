@@ -79,10 +79,19 @@ def _pylower(value):
 _conn: aiosqlite.Connection | None = None
 _conn_lock = asyncio.Lock()
 
-# Транзакции create_booking() идут через тот же коннект, что и остальные
-# запросы, поэтому их надо развести явно — иначе чужая вставка попадёт
-# внутрь чужого BEGIN IMMEDIATE.
-_tx_lock = asyncio.Lock()
+# Все запросы идут через один коннект, поэтому любая многошаговая запись
+# должна выполняться целиком, без чужих операций между шагами. Иначе:
+#   * чужой execute() попадает внутрь открытого BEGIN IMMEDIATE и
+#     откатывается вместе с ним;
+#   * чужой commit() досрочно закрывает чужую транзакцию — при
+#     isolation_level=None своей транзакции у него нет, и он коммитит ту,
+#     что уже открыта.
+# На практике срабатывал второй случай: claim_booking с подтверждением
+# оплаты закрывал транзакцию create_booking, и тот падал на
+# «cannot rollback - no transaction is active». Клиент, оплативший
+# последнее место, вместо «мест не осталось» получал сбой, а админы —
+# ни одного предупреждения. Проверка: tests/smoke.py.
+_write_lock = asyncio.Lock()
 
 
 async def connect() -> aiosqlite.Connection:
@@ -113,8 +122,26 @@ async def connect() -> aiosqlite.Connection:
 
 @asynccontextmanager
 async def _db():
-    """Общий коннект в том же виде, в каком раньше был свой на запрос."""
+    """Общий коннект для чтения. Читателям блокировка не нужна: рабочий
+    поток aiosqlite и так выполняет запросы по одному."""
     yield await connect()
+
+
+@asynccontextmanager
+async def writer():
+    """Коннект для записи: держит _write_lock до конца блока.
+
+    Под блокировкой должна идти КАЖДАЯ пишущая функция целиком — вместе со
+    своим commit() и вместе с чтениями, от которых зависит её запись.
+
+    Пропускной способности это не стоит почти ничего: рабочий поток
+    соединения всё равно исполняет запросы строго по одному, так что
+    блокировка не добавляет нового узкого места, а лишь запрещает
+    переключение между корутинами на await внутри одной записи.
+    """
+    conn = await connect()
+    async with _write_lock:
+        yield conn
 
 
 # то же самое для соседних модулей
@@ -135,7 +162,8 @@ def _now() -> str:
 # ---------- ИНИЦИАЛИЗАЦИЯ ----------
 
 async def db_init():
-    async with _db() as db:
+    # запись, пусть и до старта поллинга: правило одно для всех писателей
+    async with writer() as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS exam_dates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -367,7 +395,7 @@ async def get_date_overview(date_id: int) -> tuple | None:
 async def add_date(title: str, seats_limit: int = 0,
                    exam_date: str | None = None) -> int | None:
     """Возвращает id новой даты или None, если такая дата уже есть."""
-    async with _db() as db:
+    async with writer() as db:
         cur = await db.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM exam_dates")
         (sort_order,) = await cur.fetchone()
         try:
@@ -384,7 +412,7 @@ async def add_date(title: str, seats_limit: int = 0,
 
 async def rename_date(date_id: int, title: str) -> str:
     """'ok' — переименована, 'duplicate' — название занято, 'missing' — даты нет."""
-    async with _db() as db:
+    async with writer() as db:
         try:
             cur = await db.execute(
                 "UPDATE exam_dates SET title = ? WHERE id = ?", (title, date_id)
@@ -396,7 +424,7 @@ async def rename_date(date_id: int, title: str) -> str:
 
 
 async def set_exam_date(date_id: int, exam_date: str | None) -> bool:
-    async with _db() as db:
+    async with writer() as db:
         cur = await db.execute(
             "UPDATE exam_dates SET exam_date = ? WHERE id = ?", (exam_date, date_id)
         )
@@ -405,7 +433,7 @@ async def set_exam_date(date_id: int, exam_date: str | None) -> bool:
 
 
 async def set_date_limit(date_id: int, seats_limit: int) -> bool:
-    async with _db() as db:
+    async with writer() as db:
         cur = await db.execute(
             "UPDATE exam_dates SET seats_limit = ? WHERE id = ?", (seats_limit, date_id)
         )
@@ -415,7 +443,7 @@ async def set_date_limit(date_id: int, seats_limit: int) -> bool:
 
 async def delete_date(date_id: int) -> str:
     """Удаляет дату. Если по ней уже есть заявки — прячет её из списка ('archived')."""
-    async with _db() as db:
+    async with writer() as db:
         cur = await db.execute("SELECT COUNT(*) FROM bookings WHERE date_id = ?", (date_id,))
         (bookings_count,) = await cur.fetchone()
         if bookings_count:
@@ -428,7 +456,7 @@ async def delete_date(date_id: int) -> str:
 
 
 async def restore_date(date_id: int) -> bool:
-    async with _db() as db:
+    async with writer() as db:
         cur = await db.execute(
             "UPDATE exam_dates SET is_active = 1 WHERE id = ?", (date_id,)
         )
@@ -497,7 +525,7 @@ async def set_outcome(booking_id: int, outcome: str,
     """Проставляет итог. Переставить можно — пишем последнего, кто трогал."""
     if outcome not in OUTCOMES:
         return False
-    async with _db() as db:
+    async with writer() as db:
         cur = await db.execute(
             """UPDATE bookings
                SET outcome = ?, outcome_at = ?, outcome_by = ?, outcome_by_name = ?
@@ -549,7 +577,7 @@ async def get_meta(key: str) -> str | None:
 
 
 async def set_meta(key: str, value: str):
-    async with _db() as db:
+    async with writer() as db:
         await db.execute(
             "INSERT INTO meta (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -594,7 +622,7 @@ async def suppress_abandoned(cutoff: str) -> int:
     users = await get_abandoned_users(cutoff)
     if not users:
         return 0
-    async with _db() as db:
+    async with writer() as db:
         await db.executemany(
             "INSERT OR IGNORE INTO nudges (user_id, sent_at) VALUES (?, ?)",
             [(user_id, _now()) for user_id in users],
@@ -604,7 +632,7 @@ async def suppress_abandoned(cutoff: str) -> int:
 
 
 async def mark_nudged(user_id: int):
-    async with _db() as db:
+    async with writer() as db:
         await db.execute(
             "INSERT OR IGNORE INTO nudges (user_id, sent_at) VALUES (?, ?)",
             (user_id, _now()),
@@ -647,7 +675,7 @@ async def add_referral(user_id: int, referrer_id: int) -> bool:
     """Пишем только при первом запуске и только чужую ссылку."""
     if user_id == referrer_id:
         return False
-    async with _db() as db:
+    async with writer() as db:
         cur = await db.execute(
             "INSERT OR IGNORE INTO referrals (user_id, referrer_id, created_at) "
             "VALUES (?, ?, ?)",
@@ -719,7 +747,7 @@ async def get_cert_renewals(today_iso: str) -> list[tuple]:
 
 
 async def mark_cert_reminded(booking_id: int):
-    async with _db() as db:
+    async with writer() as db:
         await db.execute(
             "UPDATE bookings SET cert_reminder_sent_at = ? WHERE id = ?",
             (_now(), booking_id),
@@ -733,7 +761,7 @@ async def log_event(user_id: int, step: str):
     """Одно событие на шаг. Ошибку логирования глотаем: воронка не должна
     ронять диалог с клиентом."""
     try:
-        async with _db() as db:
+        async with writer() as db:
             await db.execute(
                 "INSERT INTO events (user_id, step, created_at) VALUES (?, ?, ?)",
                 (user_id, step, _now()),
@@ -793,7 +821,7 @@ async def get_bookings_to_remind(exam_date: str) -> list[tuple]:
 
 
 async def mark_reminded(booking_id: int):
-    async with _db() as db:
+    async with writer() as db:
         await db.execute(
             "UPDATE bookings SET reminder_sent_at = ? WHERE id = ?",
             (_now(), booking_id),
@@ -826,7 +854,7 @@ async def get_user_langs(user_ids: list[int]) -> dict[int, str]:
 
 
 async def set_user_lang(user_id: int, lang: str):
-    async with _db() as db:
+    async with writer() as db:
         await db.execute(
             """INSERT INTO users (user_id, lang, updated_at) VALUES (?, ?, ?)
                ON CONFLICT(user_id) DO UPDATE SET
@@ -857,7 +885,7 @@ async def create_booking(
     Проверка лимита и вставка идут в одной транзакции: иначе двое клиентов
     успевают пройти is_date_bookable() и оба занимают последнее место.
     """
-    async with _tx_lock, _db() as db:
+    async with writer() as db:
         await db.execute("BEGIN IMMEDIATE")
         try:
             cur = await db.execute(
@@ -939,7 +967,7 @@ async def cancel_booking(
     booking_id: int, admin_id: int, admin_name: str
 ) -> tuple[bool, int | None]:
     """Возвращает (была ли отменена сейчас, user_id клиента)."""
-    async with _db() as db:
+    async with writer() as db:
         cur = await db.execute(
             """UPDATE bookings
                SET status = ?, cancelled_by = ?, cancelled_by_name = ?
@@ -956,7 +984,7 @@ async def cancel_booking(
 
 async def claim_booking(booking_id: int, admin_id: int, admin_name: str):
     """Возвращает (успех, user_id, имя_подтвердившего)."""
-    async with _db() as db:
+    async with writer() as db:
         cur = await db.execute(
             """UPDATE bookings
                SET status = 'confirmed', confirmed_by = ?, confirmed_by_name = ?
@@ -979,7 +1007,7 @@ async def claim_booking(booking_id: int, admin_id: int, admin_name: str):
 # ---------- СООБЩЕНИЯ АДМИНАМ ----------
 
 async def save_admin_message(booking_id: int, admin_id: int, message_id: int):
-    async with _db() as db:
+    async with writer() as db:
         await db.execute(
             "INSERT OR REPLACE INTO admin_messages VALUES (?, ?, ?)",
             (booking_id, admin_id, message_id),

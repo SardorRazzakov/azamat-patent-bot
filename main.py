@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand, BotCommandScopeChat
@@ -49,13 +50,20 @@ async def main():
     handlers.setup(dp)
     await set_commands(bot)
 
-    # фоновая рассылка напоминаний за день до экзамена
-    asyncio.create_task(reminder_loop(bot))
+    # Фоновая рассылка напоминаний за день до экзамена.
+    # Ссылку держим у себя: у задачи без единой ссылки на неё event loop
+    # хранит только слабую, и сборщик вправе убрать её посреди работы.
+    background = asyncio.create_task(reminder_loop(bot))
 
     try:
         await dp.start_polling(bot)
     finally:
+        background.cancel()
+        with suppress(asyncio.CancelledError):
+            await background
         await db.close()
+        # HTTP-сессия живёт отдельно от диспетчера и сама не закрывается
+        await bot.session.close()
 
 
 if __name__ == "__main__":
