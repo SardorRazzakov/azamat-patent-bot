@@ -76,13 +76,22 @@ def signup_button(lang: str) -> InlineKeyboardButton:
     )
 
 
+def group_button(lang: str) -> InlineKeyboardButton:
+    """Группа с новостями об экзамене. Всегда ниже «Записаться»:
+    запись — главное действие, подписка — попутное."""
+    return InlineKeyboardButton(
+        text=texts.t("btn_group", lang), url=config.GROUP_LINK
+    )
+
+
 def greeting_keyboard(lang: str) -> InlineKeyboardMarkup:
-    """Приветствие: записаться или сперва почитать вопросы."""
+    """Приветствие: записаться, почитать вопросы или подписаться."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=texts.t("btn_continue", lang), callback_data="go:dates"
         )],
         [faq_button(lang)],
+        [group_button(lang)],
     ])
 
 
@@ -115,9 +124,7 @@ def confirm_keyboard(booking_id: int) -> InlineKeyboardMarkup:
 def after_payment_keyboard(lang: str) -> InlineKeyboardMarkup:
     """Группа и тренажёр — ссылками-кнопками, а не текстом в сообщении."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=texts.t("btn_group", lang), url=config.GROUP_LINK
-        )],
+        [group_button(lang)],
         [InlineKeyboardButton(
             text=texts.t("btn_trainer", lang), url=config.TRAINER_LINK
         )],
@@ -195,6 +202,7 @@ def faq_sections_keyboard(lang: str) -> InlineKeyboardMarkup:
         for sec, _ in texts.FAQ_SECTIONS
     ]
     rows.append([signup_button(lang)])
+    rows.append([group_button(lang)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

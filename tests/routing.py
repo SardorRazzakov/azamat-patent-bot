@@ -320,6 +320,48 @@ async def check_group(dp) -> list[str]:
     return bad
 
 
+# ---------- 5. РАСКЛАДКА КЛАВИАТУР ----------
+# Кнопки-ссылки не имеют callback_data, и резолвером их не проверить: у них
+# нет адресата. Но порядок важен сам по себе — «Записаться» должна стоять
+# выше группы, иначе попутное действие перебивает главное.
+
+def layout(kb) -> list[list[str]]:
+    return [[b.text for b in row] for row in kb.inline_keyboard]
+
+
+def urls(kb) -> list[str]:
+    return [b.url for row in kb.inline_keyboard for b in row if b.url]
+
+
+async def check_keyboards() -> list[str]:
+    from handlers import client
+    import config
+    import texts
+
+    bad = []
+    for lang in texts.LANGUAGES:
+        cont = texts.t("btn_continue", lang)
+        faq = texts.t("btn_faq", lang)
+        sign = texts.t("btn_signup", lang)
+        grp = texts.t("btn_group", lang)
+
+        got = layout(client.greeting_keyboard(lang))
+        if got != [[cont], [faq], [grp]]:
+            bad.append(f"главный экран/{lang}: {got}")
+
+        got = layout(client.faq_sections_keyboard(lang))
+        if got[-2:] != [[sign], [grp]]:
+            bad.append(f"меню FAQ/{lang}: хвост {got[-2:]}, ожидались запись и группа")
+
+        # ссылка ведёт в группу, а не куда попало
+        for name, kb in (("главный экран", client.greeting_keyboard(lang)),
+                         ("меню FAQ", client.faq_sections_keyboard(lang))):
+            if config.GROUP_LINK not in urls(kb):
+                bad.append(f"{name}/{lang}: кнопка группы не ведёт на {config.GROUP_LINK}")
+
+    return bad
+
+
 # ---------- ЗАПУСК ----------
 
 async def main() -> int:
@@ -347,6 +389,15 @@ async def main() -> int:
         n = len(ADMIN_ROUTES) + len(CLIENT_ROUTES)
         print(f"ok    адресация callback_data "
               f"({n} кнопок, админ и посторонний)")
+
+    keyboards = await check_keyboards()
+    if keyboards:
+        failed += 1
+        print("FAIL  раскладка клавиатур")
+        for line in keyboards:
+            print(f"        {line}")
+    else:
+        print("ok    раскладка клавиатур (порядок кнопок и ссылки)")
 
     group = await check_group(dp)
     if group:
