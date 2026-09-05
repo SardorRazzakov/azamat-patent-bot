@@ -269,10 +269,18 @@ async def faq_answer(callback: CallbackQuery, lang: str, bot: Bot):
     # человек там просит живого человека, а не форму
     if qid != texts.FAQ_MANAGER:
         rows.append([signup_button(lang)])
+    # приглашение в группу идёт под каждым ответом, включая менеджера
+    rows.append([group_button(lang)])
 
+    # Приглашение частью того же сообщения, а не отдельным: иначе на
+    # каждый прочитанный вопрос клиент получал бы по два сообщения.
+    answer = (
+        f"{texts.t(f'faq_q_{qid}', lang)}\n\n"
+        f"{texts.t(f'faq_a_{qid}', lang)}\n\n"
+        f"{texts.t('faq_join_group', lang)}"
+    )
     await callback.message.answer(
-        f"{texts.t(f'faq_q_{qid}', lang)}\n\n{texts.t(f'faq_a_{qid}', lang)}",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        answer, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
     await callback.answer()
 

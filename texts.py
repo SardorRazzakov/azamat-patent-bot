@@ -255,6 +255,17 @@ TEXTS: dict[str, dict[str, str]] = {
             "Tayyorgarlik uchun bepul trenajyor bor: testlar va og'zaki qism."
         ),
     },
+    "faq_join_group": {
+        RU: "📣 Подпишитесь на нашу группу — там все новости об экзамене.",
+        UZ_CYRL: (
+            "📣 Гуруҳимизга обуна бўлинг — имтиҳон ҳақидаги барча "
+            "янгиликлар ўша ерда."
+        ),
+        UZ_LATN: (
+            "📣 Guruhimizga obuna bo'ling — imtihon haqidagi barcha "
+            "yangiliklar o'sha yerda."
+        ),
+    },
     "btn_group": {
         RU: "📣 Наша группа",
         UZ_CYRL: "📣 Гуруҳимиз",
