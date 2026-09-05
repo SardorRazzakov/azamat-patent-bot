@@ -252,6 +252,14 @@ async def db_init():
                 owner_took_over INTEGER NOT NULL DEFAULT 0
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS group_replies (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                replied_at TEXT NOT NULL,
+                PRIMARY KEY (chat_id, user_id)
+            )
+        """)
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings (date_id, status)"
         )
@@ -868,6 +876,42 @@ async def set_user_lang(user_id: int, lang: str):
             (user_id, lang, _now()),
         )
         await db.commit()
+
+
+# ---------- ОТВЕТЫ В ГРУППАХ ----------
+# Один ответ человеку в сутки. В группе на две с лишним тысячи участников
+# без этого ограничения бот превращается в спам, поэтому счётчик живёт в
+# базе: в памяти он обнулялся бы при каждом редеплое.
+
+async def claim_group_reply(chat_id: int, user_id: int, cutoff: str) -> bool:
+    """True — этому человеку в этой группе с cutoff ещё не отвечали.
+
+    Решение и отметка идут одной командой. Условие висит на самом UPDATE,
+    поэтому проверка «прошли ли сутки» и запись нового времени неразделимы:
+    из двух сообщений, пришедших подряд, ответ получит ровно одно.
+    """
+    async with writer() as db:
+        cur = await db.execute(
+            """INSERT INTO group_replies (chat_id, user_id, replied_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(chat_id, user_id)
+               DO UPDATE SET replied_at = excluded.replied_at
+               WHERE group_replies.replied_at < ?""",
+            (chat_id, user_id, _now(), cutoff),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_group_reply(chat_id: int, user_id: int) -> str | None:
+    """Когда этому человеку в этой группе отвечали в последний раз."""
+    async with _db() as db:
+        cur = await db.execute(
+            "SELECT replied_at FROM group_replies WHERE chat_id = ? AND user_id = ?",
+            (chat_id, user_id),
+        )
+        row = await cur.fetchone()
+        return row[0] if row else None
 
 
 # ---------- ЛИЧНЫЕ ЧАТЫ ВЛАДЕЛЬЦА (TELEGRAM BUSINESS) ----------

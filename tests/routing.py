@@ -34,7 +34,7 @@ os.environ.setdefault(
 )
 os.environ["ADMIN_IDS"] = "777"
 
-from aiogram import Dispatcher  # noqa: E402
+from aiogram import Bot, Dispatcher  # noqa: E402
 from aiogram.types import CallbackQuery, Chat, Message, User  # noqa: E402
 
 import handlers  # noqa: E402
@@ -85,8 +85,10 @@ def check_shadowing() -> list[str]:
     """
     admin = declared_callbacks(ROOT / "handlers" / "admin.py")
     business = declared_callbacks(ROOT / "handlers" / "business.py")
+    group = declared_callbacks(ROOT / "handlers" / "group.py")
     client = declared_callbacks(ROOT / "handlers" / "client.py")
     ordered = ([("admin", *row) for row in admin]
+               + [("group", *row) for row in group]
                + [("business", *row) for row in business]
                + [("client", *row) for row in client])
 
@@ -118,16 +120,23 @@ def make_callback(data: str, user_id: int) -> CallbackQuery:
     )
 
 
+# Фильтру Command нужен bot: он сверяет «/cmd@username» с именем бота.
+# Кэш me() набиваем заранее, чтобы проверка не полезла в сеть.
+BOT = Bot(token=os.environ["BOT_TOKEN"])
+BOT._me = User(id=BOT.id, is_bot=True, first_name="Бот", username="test_bot")
+
+
 async def resolve(router, event, kind: str = "callback_query") -> str | None:
     """Имя хендлера, которому достался бы апдейт. Хендлер не вызывается."""
     observer = router.observers[kind]
 
-    ok, data = await observer.check_root_filters(event)
+    ok, data = await observer.check_root_filters(event, bot=BOT)
     if not ok:
         return None
 
+    kwargs = {"bot": BOT, **data}
     for handler in observer.handlers:
-        matched, _ = await handler.check(event, **data)
+        matched, _ = await handler.check(event, **kwargs)
         if matched:
             return handler.callback.__name__
 
@@ -256,6 +265,61 @@ async def check_business(dp) -> list[str]:
     return bad
 
 
+# ---------- 4. ГРУППОВОЙ РОУТЕР ----------
+# Он подключён первым и отфильтрован по типу чата. Ошибка в фильтре увела бы
+# к нему личные диалоги целиком — весь бот превратился бы в одну кнопку.
+
+def make_message(text: str, user_id: int, chat_type: str,
+                 chat_id: int | None = None) -> Message:
+    return Message(
+        message_id=1,
+        date=0,
+        chat=Chat(id=chat_id if chat_id is not None else user_id, type=chat_type),
+        from_user=User(id=user_id, is_bot=False, first_name="Кто-то"),
+        text=text,
+    )
+
+
+GROUP_CHAT = -1001234567890
+
+
+async def check_group(dp) -> list[str]:
+    bad = []
+
+    # В группе и супергруппе всё достаётся групповому роутеру — включая
+    # команды: /start и /admin там намеренно больше не работают.
+    for chat_type in ("group", "supergroup"):
+        for text, who in (("salom", STRANGER_ID), ("/start", STRANGER_ID),
+                          ("/admin", ADMIN_ID), ("любой текст", ADMIN_ID)):
+            got = await resolve(dp, make_message(text, who, chat_type, GROUP_CHAT),
+                                "message")
+            if got != "group_message":
+                bad.append(
+                    f"{chat_type}, {text!r} от {who}: попал в {got}, "
+                    "ожидался group_message"
+                )
+
+    # Личные диалоги групповой роутер трогать не должен вовсе.
+    private = {
+        ("/start", STRANGER_ID): "start_handler",
+        ("/faq", STRANGER_ID): "faq_command",
+        ("привет", STRANGER_ID): "unexpected_message",
+        ("/admin", ADMIN_ID): "admin_entry",
+    }
+    for (text, who), expected in private.items():
+        got = await resolve(dp, make_message(text, who, "private"), "message")
+        if got != expected:
+            bad.append(f"личка, {text!r} от {who}: попал в {got}, ожидался {expected}")
+
+    # Роутер обязан стоять первым: иначе FSM-шаг админки успеет забрать
+    # сообщение из группы себе.
+    order = [r.name for r in dp.sub_routers]
+    if order[:1] != ["group"]:
+        bad.append(f"групповой роутер не первый: порядок {order}")
+
+    return bad
+
+
 # ---------- ЗАПУСК ----------
 
 async def main() -> int:
@@ -283,6 +347,15 @@ async def main() -> int:
         n = len(ADMIN_ROUTES) + len(CLIENT_ROUTES)
         print(f"ok    адресация callback_data "
               f"({n} кнопок, админ и посторонний)")
+
+    group = await check_group(dp)
+    if group:
+        failed += 1
+        print("FAIL  групповой роутер")
+        for line in group:
+            print(f"        {line}")
+    else:
+        print("ok    групповой роутер (группа, личка, порядок)")
 
     business = await check_business(dp)
     if business:
