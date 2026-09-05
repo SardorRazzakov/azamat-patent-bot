@@ -50,6 +50,8 @@ CLICK_LINK = "https://indoor.click.uz/pay?id=0105991&t=0"
 
 # Куда ведут кнопки после подтверждения оплаты.
 GROUP_LINK = "https://t.me/sertifikat_ru_uz"
+# Для getChatMember: метод принимает и @username, числовой id не нужен.
+GROUP_CHAT_ID = "@sertifikat_ru_uz"
 TRAINER_LINK = "https://t.me/rutest_patent_bot/azamatpatent"
 
 EXAM_LOCATION_LAT = 41.29872833124857

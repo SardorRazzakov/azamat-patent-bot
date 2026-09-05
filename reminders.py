@@ -24,6 +24,7 @@ from aiogram.exceptions import (
     TelegramNetworkError,
     TelegramRetryAfter,
 )
+from aiogram.enums import ChatMemberStatus
 from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 import config
@@ -38,6 +39,10 @@ SEND_TO_HOUR = 21
 
 # Через сколько молчания считаем запись брошенной
 ABANDON_AFTER_HOURS = 24
+
+# Через сколько после подтверждения оплаты зовём в группу. Раньше не стоит:
+# в момент записи человеку хватает и без нас.
+GROUP_INVITE_AFTER_HOURS = 24
 
 # Пауза между отправками: Telegram режет бота примерно на 30 сообщениях
 # в секунду, 40 мс держат нас чуть ниже порога.
@@ -189,6 +194,76 @@ async def send_cert_renewals(bot: Bot) -> int:
     return sent
 
 
+def group_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.t("btn_group", lang), url=config.GROUP_LINK)
+    ]])
+
+
+# Статусы, при которых человек в группе состоит. У restricted членство
+# отдельным полем: он в группе, но ограничен в правах.
+IN_GROUP = (ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.CREATOR)
+
+
+async def is_group_member(bot: Bot, user_id: int) -> bool | None:
+    """True/False — состоит или нет. None — выяснить не удалось.
+
+    getChatMember про чужих людей работает, только если бот администратор
+    группы. Не сумев выяснить, ничего не шлём и отметку не ставим: человек
+    попадёт в следующий круг, когда права починят.
+    """
+    try:
+        member = await bot.get_chat_member(config.GROUP_CHAT_ID, user_id)
+    except Exception as e:
+        log.warning("членство %s в группе выяснить не удалось: %s", user_id, e)
+        return None
+
+    if member.status in IN_GROUP:
+        return True
+    if member.status == ChatMemberStatus.RESTRICTED:
+        return bool(getattr(member, "is_member", False))
+    return False
+
+
+async def send_group_invites(bot: Bot) -> int:
+    """Разовое приглашение в группу тем, кто записался, но не подписан."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(hours=GROUP_INVITE_AFTER_HOURS)).isoformat()
+    candidates = await db.get_group_invite_candidates(cutoff)
+    if not candidates:
+        return 0
+
+    langs = await db.get_user_langs(candidates)
+
+    sent = skipped = 0
+    for user_id in candidates:
+        member = await is_group_member(bot, user_id)
+        if member is None:
+            # права бота или доступность чата — чинится снаружи, не флагом
+            continue
+        if member:
+            # уже подписан: отмечаем, чтобы больше не проверять
+            await db.mark_group_invited(user_id)
+            skipped += 1
+            continue
+
+        lang = texts.lang_or_default(langs.get(user_id))
+        result = await deliver(
+            bot, user_id, texts.t("group_invite", lang), group_keyboard(lang)
+        )
+        if result == RETRY:
+            continue
+        if result == SENT:
+            sent += 1
+        await db.mark_group_invited(user_id)
+        await asyncio.sleep(SEND_PAUSE)
+
+    if sent or skipped:
+        log.info("приглашений в группу: %d, уже подписаны: %d", sent, skipped)
+    return sent
+
+
 # ---------- БЭКАП ----------
 
 def _snapshot(src_path: str) -> bytes:
@@ -246,6 +321,7 @@ async def reminder_loop(bot: Bot):
                 await send_due_reminders(bot)
                 await send_abandoned_nudges(bot)
                 await send_cert_renewals(bot)
+                await send_group_invites(bot)
 
             # дата последнего бэкапа лежит в базе, а не в памяти: иначе
             # каждый деплой присылал бы админам лишнюю копию

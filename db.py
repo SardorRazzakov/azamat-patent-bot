@@ -193,6 +193,7 @@ async def db_init():
                 outcome_by_name TEXT,
                 applicant_name TEXT,
                 cert_reminder_sent_at TEXT,
+                confirmed_at TEXT,
                 FOREIGN KEY (date_id) REFERENCES exam_dates(id)
             )
         """)
@@ -253,6 +254,12 @@ async def db_init():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS group_invites (
+                user_id INTEGER PRIMARY KEY,
+                sent_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS group_replies (
                 chat_id INTEGER NOT NULL,
                 user_id INTEGER NOT NULL,
@@ -272,6 +279,7 @@ async def db_init():
         # колонки появились позже таблицы — досоздаём в уже существующих базах
         cur = await db.execute("PRAGMA table_info(bookings)")
         columns = {row[1] for row in await cur.fetchall()}
+        added_confirmed_at = False
         for column, kind in (
             ("cancelled_by", "INTEGER"),
             ("cancelled_by_name", "TEXT"),
@@ -282,10 +290,23 @@ async def db_init():
             ("outcome_by_name", "TEXT"),
             ("applicant_name", "TEXT"),
             ("cert_reminder_sent_at", "TEXT"),
+            ("confirmed_at", "TEXT"),
         ):
             if column not in columns:
                 await db.execute(f"ALTER TABLE bookings ADD COLUMN {column} {kind}")
                 print(f"[db] добавлена колонка bookings.{column}")
+                added_confirmed_at |= column == "confirmed_at"
+
+        if added_confirmed_at:
+            # Заявки, подтверждённые до появления колонки, приглашение в
+            # группу не получат: времени подтверждения у них нет, а слать
+            # разом всей накопленной базе незачем. Помечаем как уведомлённых.
+            cur = await db.execute(
+                """INSERT OR IGNORE INTO group_invites (user_id, sent_at)
+                   SELECT DISTINCT user_id, ? FROM bookings WHERE status = ?""",
+                (_now(), CONFIRMED),
+            )
+            print(f"[db] приглашение в группу не уйдёт {cur.rowcount} прежним клиентам")
 
         cur = await db.execute("PRAGMA table_info(exam_dates)")
         if "exam_date" not in {row[1] for row in await cur.fetchall()}:
@@ -878,6 +899,50 @@ async def set_user_lang(user_id: int, lang: str):
         await db.commit()
 
 
+# ---------- ПРИГЛАШЕНИЕ В ГРУППУ ----------
+
+async def get_group_invite_candidates(cutoff: str) -> list[int]:
+    """Аккаунты с подтверждённой заявкой, которым приглашение ещё не слали.
+
+    Отсчёт идёт от подтверждения оплаты, а не от создания заявки: сутки
+    после подтверждения человек занят самой записью, и лишнее сообщение в
+    этот момент только мешает.
+
+    Заявки, подтверждённые до появления confirmed_at, сюда не попадают —
+    их владельцы помечены уведомлёнными ещё на миграции.
+    """
+    async with _db() as db:
+        cur = await db.execute(
+            """SELECT DISTINCT b.user_id
+               FROM bookings b
+               LEFT JOIN group_invites g ON g.user_id = b.user_id
+               WHERE b.status = ?
+                 AND g.user_id IS NULL
+                 AND b.confirmed_at IS NOT NULL
+                 AND b.confirmed_at < ?""",
+            (CONFIRMED, cutoff),
+        )
+        return [row[0] for row in await cur.fetchall()]
+
+
+async def mark_group_invited(user_id: int):
+    """Отметка ставится и тем, кто уже подписан: проверять их снова незачем."""
+    async with writer() as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO group_invites (user_id, sent_at) VALUES (?, ?)",
+            (user_id, _now()),
+        )
+        await db.commit()
+
+
+async def was_group_invited(user_id: int) -> bool:
+    async with _db() as db:
+        cur = await db.execute(
+            "SELECT 1 FROM group_invites WHERE user_id = ?", (user_id,)
+        )
+        return await cur.fetchone() is not None
+
+
 # ---------- ОТВЕТЫ В ГРУППАХ ----------
 # Один ответ человеку в сутки. В группе на две с лишним тысячи участников
 # без этого ограничения бот превращается в спам, поэтому счётчик живёт в
@@ -1082,9 +1147,10 @@ async def claim_booking(booking_id: int, admin_id: int, admin_name: str):
     async with writer() as db:
         cur = await db.execute(
             """UPDATE bookings
-               SET status = 'confirmed', confirmed_by = ?, confirmed_by_name = ?
+               SET status = 'confirmed', confirmed_by = ?, confirmed_by_name = ?,
+                   confirmed_at = ?
                WHERE id = ? AND status = 'pending'""",
-            (admin_id, admin_name, booking_id),
+            (admin_id, admin_name, _now(), booking_id),
         )
         await db.commit()
         won = cur.rowcount > 0

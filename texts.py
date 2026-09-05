@@ -255,6 +255,23 @@ TEXTS: dict[str, dict[str, str]] = {
             "Tayyorgarlik uchun bepul trenajyor bor: testlar va og'zaki qism."
         ),
     },
+    "group_invite": {
+        RU: (
+            "Напоминаем про нашу группу 📣\n\n"
+            "Там актуальные даты, изменения и всё важное об экзамене.\n\n"
+            "Подпишитесь, пожалуйста, чтобы ничего не пропустить."
+        ),
+        UZ_CYRL: (
+            "Гуруҳимизни эслатиб ўтамиз 📣\n\n"
+            "У ерда имтиҳон саналари, ўзгаришлар ва барча муҳим маълумотлар.\n\n"
+            "Ҳеч нарсани ўтказиб юбормаслик учун обуна бўлинг."
+        ),
+        UZ_LATN: (
+            "Guruhimizni eslatib o'tamiz 📣\n\n"
+            "U yerda imtihon sanalari, o'zgarishlar va barcha muhim ma'lumotlar.\n\n"
+            "Hech narsani o'tkazib yubormaslik uchun obuna bo'ling."
+        ),
+    },
     "faq_join_group": {
         RU: "📣 Подпишитесь на нашу группу — там все новости об экзамене.",
         UZ_CYRL: (
