@@ -84,8 +84,10 @@ def check_shadowing() -> list[str]:
     способен перехватить клиентский callback у админа.
     """
     admin = declared_callbacks(ROOT / "handlers" / "admin.py")
+    business = declared_callbacks(ROOT / "handlers" / "business.py")
     client = declared_callbacks(ROOT / "handlers" / "client.py")
     ordered = ([("admin", *row) for row in admin]
+               + [("business", *row) for row in business]
                + [("client", *row) for row in client])
 
     bad = []
@@ -116,9 +118,9 @@ def make_callback(data: str, user_id: int) -> CallbackQuery:
     )
 
 
-async def resolve(router, event) -> str | None:
+async def resolve(router, event, kind: str = "callback_query") -> str | None:
     """Имя хендлера, которому достался бы апдейт. Хендлер не вызывается."""
-    observer = router.callback_query
+    observer = router.observers[kind]
 
     ok, data = await observer.check_root_filters(event)
     if not ok:
@@ -130,7 +132,7 @@ async def resolve(router, event) -> str | None:
             return handler.callback.__name__
 
     for sub in router.sub_routers:
-        found = await resolve(sub, event)
+        found = await resolve(sub, event, kind)
         if found:
             return found
     return None
@@ -205,6 +207,55 @@ async def check_routes(dp) -> list[str]:
     return bad
 
 
+# ---------- 3. BUSINESS-РОУТЕР ----------
+# Автоответ от имени владельца ходит отдельными типами апдейтов. Здесь
+# проверяется только адресация: что бот их вообще запрашивает у Telegram,
+# что они попадают в business-хендлеры и что этот роутер не трогает
+# обычные чаты. Решение «отвечать или молчать» проверяется в tests/business.py.
+
+def make_business_message(text: str | None, user_id: int) -> Message:
+    return Message(
+        message_id=1,
+        date=0,
+        chat=Chat(id=user_id, type="private"),
+        from_user=User(id=user_id, is_bot=False, first_name="Клиент"),
+        text=text,
+        business_connection_id="conn-1",
+    )
+
+
+async def check_business(dp) -> list[str]:
+    bad = []
+
+    # Без подписки апдейты просто не придут: allowed_updates собирается
+    # из зарегистрированных хендлеров.
+    subscribed = dp.resolve_used_update_types()
+    for kind in ("business_message", "business_connection"):
+        if kind not in subscribed:
+            bad.append(f"{kind} нет в allowed_updates — апдейт не придёт")
+
+    got = await resolve(dp, make_business_message("salom", STRANGER_ID),
+                        "business_message")
+    if got != "business_message":
+        bad.append(f"business_message попал в {got}, ожидался business_message")
+
+    # Сообщение без текста должен разбирать тот же хендлер: молчание — это
+    # его решение, а не отсутствие маршрута.
+    got = await resolve(dp, make_business_message(None, STRANGER_ID),
+                        "business_message")
+    if got != "business_message":
+        bad.append(f"business_message без текста попал в {got}")
+
+    # Business-роутер не должен подписываться на обычные чаты: иначе он
+    # начнёт перехватывать переписку клиентов с самим ботом.
+    from handlers import business as business_module
+    for kind in ("message", "callback_query"):
+        if business_module.router.observers[kind].handlers:
+            bad.append(f"business-роутер разбирает {kind} — он не должен")
+
+    return bad
+
+
 # ---------- ЗАПУСК ----------
 
 async def main() -> int:
@@ -232,6 +283,15 @@ async def main() -> int:
         n = len(ADMIN_ROUTES) + len(CLIENT_ROUTES)
         print(f"ok    адресация callback_data "
               f"({n} кнопок, админ и посторонний)")
+
+    business = await check_business(dp)
+    if business:
+        failed += 1
+        print("FAIL  business-роутер")
+        for line in business:
+            print(f"        {line}")
+    else:
+        print("ok    business-роутер (подписка и адресация)")
 
     print()
     print("маршрутизация в порядке" if not failed

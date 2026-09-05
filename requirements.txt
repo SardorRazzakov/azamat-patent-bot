@@ -1,4 +1,4 @@
-aiogram
+aiogram>=3.7
 aiosqlite
 openpyxl
 python-dotenv>=1.0.0

@@ -245,6 +245,13 @@ async def db_init():
                 updated_at TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS business_chats (
+                chat_id INTEGER PRIMARY KEY,
+                replied_at TEXT,
+                owner_took_over INTEGER NOT NULL DEFAULT 0
+            )
+        """)
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings (date_id, status)"
         )
@@ -861,6 +868,51 @@ async def set_user_lang(user_id: int, lang: str):
             (user_id, lang, _now()),
         )
         await db.commit()
+
+
+# ---------- ЛИЧНЫЕ ЧАТЫ ВЛАДЕЛЬЦА (TELEGRAM BUSINESS) ----------
+# Состояние автоответа переживает редеплой: в памяти оно обнулялось бы
+# при каждом рестарте, и клиент получал бы приветствие повторно.
+
+async def claim_business_reply(chat_id: int) -> bool:
+    """True — автоответ этому чату ещё не отправляли и владелец его не забирал.
+
+    Решение и отметка идут одной вставкой: два сообщения подряд приходят
+    разными апдейтами и обрабатываются параллельно, а поздороваться нужно
+    ровно один раз. Строка, заведённая mark_business_takeover(), вставку
+    тоже отклонит — забранный владельцем чат сюда не пройдёт.
+    """
+    async with writer() as db:
+        cur = await db.execute(
+            """INSERT OR IGNORE INTO business_chats
+               (chat_id, replied_at, owner_took_over) VALUES (?, ?, 0)""",
+            (chat_id, _now()),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def mark_business_takeover(chat_id: int):
+    """Владелец написал в чат сам — бот здесь больше не пишет никогда."""
+    async with writer() as db:
+        await db.execute(
+            """INSERT INTO business_chats (chat_id, replied_at, owner_took_over)
+               VALUES (?, NULL, 1)
+               ON CONFLICT(chat_id) DO UPDATE SET owner_took_over = 1""",
+            (chat_id,),
+        )
+        await db.commit()
+
+
+async def get_business_chat(chat_id: int) -> tuple[str | None, bool] | None:
+    """(когда ответили, забрал ли владелец) или None, если чат не встречался."""
+    async with _db() as db:
+        cur = await db.execute(
+            "SELECT replied_at, owner_took_over FROM business_chats WHERE chat_id = ?",
+            (chat_id,),
+        )
+        row = await cur.fetchone()
+        return (row[0], bool(row[1])) if row else None
 
 
 # ---------- ЗАЯВКИ ----------
