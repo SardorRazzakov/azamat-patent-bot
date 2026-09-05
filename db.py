@@ -99,11 +99,10 @@ async def connect() -> aiosqlite.Connection:
     if _conn is None:
         async with _conn_lock:
             if _conn is None:                       # проверка после ожидания
-                conn = aiosqlite.connect(DB_PATH, isolation_level=None)
-                # поток соединения не должен держать процесс живым, если
-                # close() забыли вызвать — иначе скрипт не завершится
-                conn.daemon = True
-                conn = await conn
+                # Рабочий поток соединения не демон (и Connection больше не
+                # наследует Thread, так что выставить daemon нечему): пока
+                # соединение открыто, процесс не завершится. Закрывает main().
+                conn = await aiosqlite.connect(DB_PATH, isolation_level=None)
                 # WAL: читатели не блокируют писателя и наоборот.
                 await conn.execute("PRAGMA journal_mode=WAL")
                 # Ждать освободившуюся блокировку, а не падать сразу.

@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from contextlib import suppress
+from contextlib import AsyncExitStack, suppress
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand, BotCommandScopeChat
@@ -39,31 +39,41 @@ async def set_commands(bot: Bot):
             print(f"[admins] не удалось задать команды для {admin_id}: {e}")
 
 
+async def stop_task(task: asyncio.Task):
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
 async def main():
     config.validate()
 
-    # база поднимается раньше диспетчера: в ней же лежит хранилище FSM
-    await db_init()
+    # Каждый ресурс регистрирует свою уборку сразу после захвата, поэтому
+    # закрывается всё и на штатной остановке, и на Ctrl+C, и на исключении
+    # посреди старта. Для базы это обязательно: рабочий поток aiosqlite не
+    # демон, и с незакрытым соединением процесс не упадёт, а повиснет.
+    async with AsyncExitStack() as stack:
+        # Регистрируем до db_init(): соединение открывается внутри него,
+        # и упасть он может уже с открытым — например на миграции.
+        # База поднимается раньше диспетчера: в ней же лежит хранилище FSM.
+        stack.push_async_callback(db.close)
+        await db_init()
 
-    bot = Bot(token=config.TOKEN)
-    dp = Dispatcher(storage=SQLiteStorage())
-    handlers.setup(dp)
-    await set_commands(bot)
-
-    # Фоновая рассылка напоминаний за день до экзамена.
-    # Ссылку держим у себя: у задачи без единой ссылки на неё event loop
-    # хранит только слабую, и сборщик вправе убрать её посреди работы.
-    background = asyncio.create_task(reminder_loop(bot))
-
-    try:
-        await dp.start_polling(bot)
-    finally:
-        background.cancel()
-        with suppress(asyncio.CancelledError):
-            await background
-        await db.close()
+        bot = Bot(token=config.TOKEN)
         # HTTP-сессия живёт отдельно от диспетчера и сама не закрывается
-        await bot.session.close()
+        stack.push_async_callback(bot.session.close)
+
+        dp = Dispatcher(storage=SQLiteStorage())
+        handlers.setup(dp)
+        await set_commands(bot)
+
+        # Фоновая рассылка напоминаний за день до экзамена.
+        # Ссылку держим у себя: у задачи без единой ссылки на неё event loop
+        # хранит только слабую, и сборщик вправе убрать её посреди работы.
+        background = asyncio.create_task(reminder_loop(bot))
+        stack.push_async_callback(stop_task, background)
+
+        await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
