@@ -1,6 +1,14 @@
 import os
 from datetime import timedelta, timezone
 
+# Локальная разработка: подхватываем .env, если он есть.
+# На Railway переменные приходят из окружения, файла там нет — вызов безвреден.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # В базе время хранится в UTC, а админам показывается в этом поясе.
 TZ = timezone(timedelta(hours=5))  # Ташкент, UTC+5
 
