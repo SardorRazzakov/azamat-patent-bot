@@ -172,12 +172,18 @@ async def language_chosen(callback: CallbackQuery, state: FSMContext):
 # посреди записи и вернуться на свой шаг.
 
 def faq_sections_keyboard(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    """Разделы, под ними — выход на запись.
+
+    Кнопки «Назад» здесь нет: это верхний уровень FAQ, возвращаться некуда.
+    """
+    rows = [
         [InlineKeyboardButton(
             text=texts.t(f"faq_sec_{sec}", lang), callback_data=f"faq:s:{sec}"
         )]
         for sec, _ in texts.FAQ_SECTIONS
-    ])
+    ]
+    rows.append([signup_button(lang)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def show_faq_root(message: Message, lang: str):
