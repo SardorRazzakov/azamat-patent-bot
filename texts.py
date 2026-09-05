@@ -232,6 +232,39 @@ TEXTS: dict[str, dict[str, str]] = {
             "quyidagi tugmani bosing."
         ),
     },
+    "exam_address": {
+        RU: "Тест-центр, Ташкент, ул. Паркентская, д. 331",
+        UZ_CYRL: "Тест-марказ, Тошкент, Паркент кўчаси, 331-уй",
+        UZ_LATN: "Test-markaz, Toshkent, Parkent ko'chasi, 331-uy",
+    },
+    "after_payment_links": {
+        RU: (
+            "Подпишитесь на нашу группу, чтобы не пропустить важное "
+            "об экзамене.\n\n"
+            "А подготовиться поможет бесплатный тренажёр: тесты "
+            "и устная часть."
+        ),
+        UZ_CYRL: (
+            "Имтиҳон ҳақидаги муҳим янгиликларни ўтказиб юбормаслик учун "
+            "гуруҳимизга обуна бўлинг.\n\n"
+            "Тайёргарлик учун бепул тренажёр бор: тестлар ва оғзаки қисм."
+        ),
+        UZ_LATN: (
+            "Imtihon haqidagi muhim yangiliklarni o'tkazib yubormaslik uchun "
+            "guruhimizga obuna bo'ling.\n\n"
+            "Tayyorgarlik uchun bepul trenajyor bor: testlar va og'zaki qism."
+        ),
+    },
+    "btn_group": {
+        RU: "📣 Наша группа",
+        UZ_CYRL: "📣 Гуруҳимиз",
+        UZ_LATN: "📣 Guruhimiz",
+    },
+    "btn_trainer": {
+        RU: "🎯 Тренажёр",
+        UZ_CYRL: "🎯 Тренажёр",
+        UZ_LATN: "🎯 Trenajyor",
+    },
     "referral_link": {
         RU: (
             "Хотите пригласить друзей? 🤝\n\n"

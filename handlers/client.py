@@ -112,6 +112,18 @@ def confirm_keyboard(booking_id: int) -> InlineKeyboardMarkup:
     ]])
 
 
+def after_payment_keyboard(lang: str) -> InlineKeyboardMarkup:
+    """Группа и тренажёр — ссылками-кнопками, а не текстом в сообщении."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=texts.t("btn_group", lang), url=config.GROUP_LINK
+        )],
+        [InlineKeyboardButton(
+            text=texts.t("btn_trainer", lang), url=config.TRAINER_LINK
+        )],
+    ])
+
+
 def done_keyboard(admin_name: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=f"✅ Подтвердил {admin_name}", callback_data="noop")
@@ -463,8 +475,20 @@ async def confirm_payment(callback: CallbackQuery, bot: Bot):
 
     # Язык клиента, а не того админа, который нажал кнопку.
     client_lang = texts.lang_or_default(await db.get_user_lang(client_id))
+    # Одним сообщением, а не тремя: подтверждение, адрес и ссылки — это
+    # то, что клиент читает подряд. Адрес идёт сразу под своим заголовком
+    # из payment_confirmed, а пин приходит следом, так что карта и текст
+    # читаются как одно целое. Кнопки оказываются прямо над пином.
+    confirmation = (
+        f"{texts.t('payment_confirmed', client_lang)}\n"
+        f"{texts.t('exam_address', client_lang)}\n\n"
+        f"{texts.t('after_payment_links', client_lang)}"
+    )
     try:
-        await bot.send_message(client_id, texts.t("payment_confirmed", client_lang))
+        await bot.send_message(
+            client_id, confirmation,
+            reply_markup=after_payment_keyboard(client_lang),
+        )
         await bot.send_location(
             client_id,
             latitude=config.EXAM_LOCATION_LAT,

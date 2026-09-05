@@ -48,6 +48,10 @@ DEFAULT_DATES = [
 PAYME_LINK = "https://payme.uz/fallback/merchant/?id=6a4673b9ccf9c1de0aa04520"
 CLICK_LINK = "https://indoor.click.uz/pay?id=0105991&t=0"
 
+# Куда ведут кнопки после подтверждения оплаты.
+GROUP_LINK = "https://t.me/sertifikat_ru_uz"
+TRAINER_LINK = "https://t.me/rutest_patent_bot/azamatpatent"
+
 EXAM_LOCATION_LAT = 41.29872833124857
 EXAM_LOCATION_LON = 69.34990462234283
 
