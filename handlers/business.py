@@ -35,9 +35,26 @@ router = Router(name="business")
 # Текст один и не идёт через texts.py: язык клиента здесь неизвестен —
 # он ещё ничего не выбирал и в users его нет.
 REPLY = (
-    "Assalomu alaykum! Imtihonga yozilish, sanalar va narx — shu yerda: "
-    "@azamat_patent_bot\n\n"
-    "Bo'sh bo'lganimda shaxsan javob beraman."
+    "Assalomu alaykum! 👋\n\n"
+    "👥 Guruhimiz — har kuni bepul imtihon savollari:\n"
+    "https://t.me/sertifikat_ru_uz\n\n"
+    "Rus tili sertifikati bo'yicha ma'lumot beraman.\n\n"
+    "💰 Narxlar:\n"
+    "• Faqat imtihon — 1 400 000 so'm\n"
+    "• Imtihon + o'quv kursi — 1 600 000 so'm\n\n"
+    "📄 Kerakli hujjatlar:\n"
+    "• Pasport nusxasi\n"
+    "• To'lov cheki\n\n"
+    "📍 Manzil: Toshkent, Parkent ko'chasi, 331\n\n"
+    "💳 O'zbekistondan to'lov:\n"
+    "Payme — https://payme.uz/fallback/merchant/?id=6a4673b9ccf9c1de0aa04520\n"
+    "Click — https://indoor.click.uz/pay?id=0105991&t=0\n\n"
+    "💳 Rossiyadan to'lov (Sberbank):\n"
+    "Karta: 2202 2069 3871 6664\n"
+    "Qabul qiluvchi: Юсупов Азамат\n"
+    "• Faqat imtihon — 9 500 ₽\n"
+    "• Imtihon + kurs — 11 000 ₽\n\n"
+    "Qaysi sanaga yozilmoqchisiz?"
 )
 
 # id владельца на подключение. В памяти намеренно: значение всегда можно
