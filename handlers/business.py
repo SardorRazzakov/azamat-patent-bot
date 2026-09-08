@@ -28,6 +28,7 @@ business_message приходит и на входящие, и на исходя
 from aiogram import Bot, Router
 from aiogram.types import BusinessConnection, Message
 
+import config
 import db
 
 router = Router(name="business")
@@ -57,6 +58,10 @@ REPLY = (
     "Qaysi sanaga yozilmoqchisiz?"
 )
 
+# Сколько текста клиента попадает в уведомление: длинное сообщение
+# в сводке ни к чему, суть видна по первым строкам.
+NOTIFY_TEXT_LIMIT = 200
+
 # id владельца на подключение. В памяти намеренно: значение всегда можно
 # перезапросить, а неверно переживший рестарт владелец был бы опаснее.
 _owners: dict[str, int] = {}
@@ -85,6 +90,35 @@ async def connection_changed(event: BusinessConnection):
     _owners[event.id] = event.user.id
     state = "включено" if event.is_enabled else "выключено"
     print(f"[business] подключение {event.id}: {state}, владелец {event.user.id}")
+
+
+async def notify_new_client(bot: Bot, message: Message):
+    """Сводка о новом клиенте тому, кто разбирает личку владельца.
+
+    Обычным сообщением от бота, без business_connection_id: это личка
+    получателя, а не переписка от имени владельца.
+
+    Ошибку глотаем: клиент свой ответ уже получил, и ронять из-за
+    несостоявшейся сводки хендлер незачем.
+    """
+    if not config.BUSINESS_NOTIFY_ID:
+        return
+
+    user = message.from_user
+    username = f"@{user.username}" if user.username else "без username"
+    text = (message.text or "")[:NOTIFY_TEXT_LIMIT]
+
+    try:
+        await bot.send_message(
+            config.BUSINESS_NOTIFY_ID,
+            f"💬 Новый клиент в личке\n"
+            f"Имя: {user.full_name}\n"
+            f"{username}\n"
+            f"Первое сообщение: {text}\n\n"
+            f"Клиенту отправлен прайс и задан вопрос о дате.",
+        )
+    except Exception as e:
+        print(f"[business] уведомление о клиенте {user.id} не ушло: {e}")
 
 
 @router.business_message()
@@ -125,3 +159,8 @@ async def business_message(message: Message, bot: Bot):
         )
     except Exception as e:
         print(f"[business] автоответ в чат {message.chat.id} не ушёл: {e}")
+        return
+
+    # Только после того, как ответ действительно ушёл: сводка о клиенте,
+    # которому ничего не отправили, вводила бы в заблуждение.
+    await notify_new_client(bot, message)

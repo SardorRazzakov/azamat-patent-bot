@@ -24,23 +24,28 @@ _TMP = tempfile.mkdtemp(prefix="patentbot-business-")
 os.environ["DB_PATH"] = os.path.join(_TMP, "b.db")
 os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("ADMIN_IDS", "1")
+os.environ["BUSINESS_NOTIFY_ID"] = "555"
 
 from aiogram.types import Chat, Message, User  # noqa: E402
 
+import config  # noqa: E402
 import db  # noqa: E402
 from handlers import business  # noqa: E402
 
 OWNER_ID = 500
 CLIENT_ID = 900
 OUR_BOT_ID = 42
+NOTIFY_ID = 555
 
 
 class FakeBot:
     """Отдаёт владельца подключения и копит отправленные сообщения."""
 
-    def __init__(self, owner: int | None = OWNER_ID):
+    def __init__(self, owner: int | None = OWNER_ID, notify_fails: bool = False):
         self.owner = owner
-        self.sent: list[dict] = []
+        self.notify_fails = notify_fails
+        self.sent: list[dict] = []           # ответы клиенту
+        self.notified: list[dict] = []       # сводки о новом клиенте
 
     async def get_business_connection(self, connection_id: str):
         if self.owner is None:
@@ -52,15 +57,22 @@ class FakeBot:
         return Connection()
 
     async def send_message(self, chat_id, text, business_connection_id=None, **kw):
-        self.sent.append({
+        entry = {
             "chat_id": chat_id,
             "text": text,
             "business_connection_id": business_connection_id,
-        })
+        }
+        # Сводка идёт без business_connection_id — по нему их и различаем.
+        if business_connection_id is None:
+            if self.notify_fails:
+                raise RuntimeError("получатель заблокировал бота")
+            self.notified.append(entry)
+        else:
+            self.sent.append(entry)
 
 
 def incoming(chat_id: int, *, sender: int, text: str | None = "salom",
-             from_our_bot: bool = False) -> Message:
+             from_our_bot: bool = False, username: str | None = None) -> Message:
     sender_bot = None
     if from_our_bot:
         sender_bot = User(id=OUR_BOT_ID, is_bot=True, first_name="Бот")
@@ -68,17 +80,18 @@ def incoming(chat_id: int, *, sender: int, text: str | None = "salom",
         message_id=1,
         date=0,
         chat=Chat(id=chat_id, type="private"),
-        from_user=User(id=sender, is_bot=False, first_name="Кто-то"),
+        from_user=User(id=sender, is_bot=False, first_name="Кто-то",
+                       username=username),
         text=text,
         business_connection_id="conn-1",
         sender_business_bot=sender_bot,
     )
 
 
-def fresh_bot(owner: int | None = OWNER_ID) -> FakeBot:
+def fresh_bot(owner: int | None = OWNER_ID, notify_fails: bool = False) -> FakeBot:
     # кэш владельца живёт в модуле и между случаями его надо сбрасывать
     business._owners.clear()
-    return FakeBot(owner)
+    return FakeBot(owner, notify_fails)
 
 
 # ---------- ПРОВЕРКИ ----------
@@ -195,6 +208,69 @@ async def claim_is_atomic():
     assert len(bot.sent) == 1, f"на 8 одновременных сообщений ответов {len(bot.sent)}"
 
 
+async def notifies_about_new_client():
+    """Сводка уходит вместе с первым ответом — и только с ним."""
+    bot, chat = fresh_bot(), 1008
+
+    await business.business_message(
+        incoming(chat, sender=CLIENT_ID, text="Salom, narxi qancha?",
+                 username="client"),
+        bot,
+    )
+    assert len(bot.notified) == 1, f"сводок отправлено {len(bot.notified)}"
+
+    note = bot.notified[0]
+    assert note["chat_id"] == NOTIFY_ID, f"сводка ушла на {note['chat_id']}"
+    # это личка получателя, а не переписка от имени владельца
+    assert note["business_connection_id"] is None, (
+        "сводка ушла с business_connection_id — то есть от имени владельца"
+    )
+    for part in ("Новый клиент", "@client", "Salom, narxi qancha?"):
+        assert part in note["text"], f"в сводке нет «{part}»"
+
+
+async def no_notification_without_reply():
+    """Повторное сообщение ответа не даёт — значит и сводки быть не должно."""
+    bot, chat = fresh_bot(), 1009
+
+    await business.business_message(incoming(chat, sender=CLIENT_ID), bot)
+    assert len(bot.notified) == 1
+
+    for _ in range(3):
+        await business.business_message(incoming(chat, sender=CLIENT_ID), bot)
+    assert len(bot.notified) == 1, f"сводок стало {len(bot.notified)}"
+
+    # владелец забрал чат — тоже без ответа и без сводки
+    await business.business_message(incoming(chat, sender=OWNER_ID), bot)
+    assert len(bot.notified) == 1, "вмешательство владельца дало сводку"
+
+
+async def works_without_notify_id():
+    """Переменная не задана — клиент получает ответ как раньше."""
+    saved = config.BUSINESS_NOTIFY_ID
+    config.BUSINESS_NOTIFY_ID = None
+    try:
+        bot, chat = fresh_bot(), 1010
+        await business.business_message(incoming(chat, sender=CLIENT_ID), bot)
+        assert len(bot.sent) == 1, "без BUSINESS_NOTIFY_ID сломался сам ответ"
+        assert not bot.notified, "сводка ушла, хотя получатель не задан"
+    finally:
+        config.BUSINESS_NOTIFY_ID = saved
+
+
+async def notify_failure_does_not_break_reply():
+    """Сводка не дошла — клиент своё уже получил, падать незачем."""
+    bot, chat = fresh_bot(notify_fails=True), 1011
+
+    await business.business_message(incoming(chat, sender=CLIENT_ID), bot)
+    assert len(bot.sent) == 1, "ответ клиенту не ушёл из-за сводки"
+    assert not bot.notified
+
+    # чат помечен отвеченным: второй раз клиента не побеспокоят
+    replied_at, _ = await db.get_business_chat(chat)
+    assert replied_at is not None
+
+
 CHECKS = (
     replies_once_per_chat,
     silent_after_owner_took_over,
@@ -203,6 +279,10 @@ CHECKS = (
     ignores_own_reply_echo,
     silent_when_owner_unknown,
     claim_is_atomic,
+    notifies_about_new_client,
+    no_notification_without_reply,
+    works_without_notify_id,
+    notify_failure_does_not_break_reply,
 )
 
 

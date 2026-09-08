@@ -29,6 +29,18 @@ ADMIN_IDS = parse_admin_ids(
     os.environ.get("ADMIN_IDS") or os.environ.get("ADMIN_ID", "")
 )
 
+
+def parse_optional_id(raw: str | None) -> int | None:
+    """Один необязательный id. Мусор и пустое значение дают None:
+    из-за кривой переменной окружения бот падать не должен."""
+    raw = (raw or "").strip()
+    return int(raw) if raw.lstrip("-").isdigit() else None
+
+
+# Кому сообщать о новом клиенте в личке владельца (Telegram Business).
+# Не задана — уведомления просто не шлются.
+BUSINESS_NOTIFY_ID = parse_optional_id(os.environ.get("BUSINESS_NOTIFY_ID"))
+
 # Посев дат при поднятии базы с нуля: (название, мест). 0 — без лимита.
 # На уже работающей базе не применяется — там даты заводятся через админку.
 # Формат названия нейтральный: его видят клиенты на всех трёх языках.
