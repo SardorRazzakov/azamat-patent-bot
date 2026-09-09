@@ -26,7 +26,9 @@ os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("ADMIN_IDS", "1")
 os.environ["BUSINESS_NOTIFY_ID"] = "555"
 
-from aiogram.types import Chat, Message, User  # noqa: E402
+from aiogram.types import (  # noqa: E402
+    Chat, Document, Message, PhotoSize, Sticker, User, Video, Voice,
+)
 
 import config  # noqa: E402
 import db  # noqa: E402
@@ -71,20 +73,40 @@ class FakeBot:
             self.sent.append(entry)
 
 
+# Сообщения без текста: у таких клиент присылает голосовое или фото
+# паспорта вместо приветствия.
+MEDIA = {
+    "voice": lambda: {"voice": Voice(file_id="f", file_unique_id="u", duration=3)},
+    "photo": lambda: {"photo": [PhotoSize(file_id="f", file_unique_id="u",
+                                          width=90, height=90)]},
+    "video": lambda: {"video": Video(file_id="f", file_unique_id="u",
+                                     width=90, height=90, duration=5)},
+    "document": lambda: {"document": Document(file_id="f", file_unique_id="u")},
+    "sticker": lambda: {"sticker": Sticker(file_id="f", file_unique_id="u",
+                                           type="regular", width=90, height=90,
+                                           is_animated=False, is_video=False)},
+}
+
+
 def incoming(chat_id: int, *, sender: int, text: str | None = "salom",
-             from_our_bot: bool = False, username: str | None = None) -> Message:
+             from_our_bot: bool = False, username: str | None = None,
+             kind: str | None = None, caption: str | None = None) -> Message:
     sender_bot = None
     if from_our_bot:
         sender_bot = User(id=OUR_BOT_ID, is_bot=True, first_name="Бот")
+    # У медиасообщения text пустой — подпись Telegram кладёт в caption
+    media = MEDIA[kind]() if kind else {}
     return Message(
         message_id=1,
         date=0,
         chat=Chat(id=chat_id, type="private"),
         from_user=User(id=sender, is_bot=False, first_name="Кто-то",
                        username=username),
-        text=text,
+        text=None if kind else text,
+        caption=caption,
         business_connection_id="conn-1",
         sender_business_bot=sender_bot,
+        **media,
     )
 
 
@@ -145,23 +167,26 @@ async def owner_takeover_after_reply():
     assert len(bot.sent) == 1, "владелец спровоцировал второй ответ"
 
 
-async def ignores_messages_without_text():
-    """Стикеры, фото, голосовые и файлы приходят без text — на них молчим.
+async def replies_to_messages_without_text():
+    """Голосовое и фото тоже получают ответ.
 
-    Своей единственной попытки ответа чат при этом не теряет: поздороваться
-    в ответ на стикер нечем, но следующее текстовое сообщение ответ получит.
+    Клиенты часто начинают голосовым или сразу шлют фото паспорта. Пока
+    ответ требовал текста, такие люди оставались без него вовсе.
     """
-    bot, chat = fresh_bot(), 1004
+    for kind, chat in (("voice", 1004), ("photo", 1012)):
+        bot = fresh_bot()
 
-    await business.business_message(incoming(chat, sender=CLIENT_ID, text=None), bot)
-    assert not bot.sent, "ответил на сообщение без текста"
-    assert await db.get_business_chat(chat) is None, "чат зря помечен"
+        await business.business_message(
+            incoming(chat, sender=CLIENT_ID, kind=kind), bot
+        )
+        assert len(bot.sent) == 1, f"{kind}: ответов {len(bot.sent)}"
+        assert bot.sent[0]["text"] == business.REPLY
 
-    await business.business_message(incoming(chat, sender=CLIENT_ID, text="   "), bot)
-    assert not bot.sent, "ответил на пробелы"
-
-    await business.business_message(incoming(chat, sender=CLIENT_ID), bot)
-    assert len(bot.sent) == 1, "текст после стикера остался без ответа"
+        # правило «один ответ на диалог» на медиа распространяется тоже
+        await business.business_message(
+            incoming(chat, sender=CLIENT_ID, kind=kind), bot
+        )
+        assert len(bot.sent) == 1, f"{kind}: ответил повторно"
 
 
 async def ignores_own_reply_echo():
@@ -229,6 +254,69 @@ async def notifies_about_new_client():
         assert part in note["text"], f"в сводке нет «{part}»"
 
 
+async def notification_shows_message_kind():
+    """Без текста в сводке стоит тип сообщения, а не пустое место.
+
+    Иначе получатель видит «Первое сообщение:» и обрыв — непонятно, то ли
+    клиент прислал пустое, то ли сводка сломалась.
+    """
+    kinds = {
+        "voice": "голосовое",
+        "photo": "фото",
+        "video": "видео",
+        "document": "файл",
+        "sticker": "стикер",
+    }
+    for i, (kind, expected) in enumerate(kinds.items()):
+        bot, chat = fresh_bot(), 1020 + i
+
+        await business.business_message(
+            incoming(chat, sender=CLIENT_ID, kind=kind), bot
+        )
+        assert len(bot.notified) == 1, f"{kind}: сводок {len(bot.notified)}"
+
+        line = f"Первое сообщение: {expected}"
+        assert line in bot.notified[0]["text"], (
+            f"{kind}: в сводке нет «{line}»\n{bot.notified[0]['text']}"
+        )
+
+    # Неизвестный тип и текст из одних пробелов сводятся к «другое».
+    bot, chat = fresh_bot(), 1030
+    await business.business_message(
+        incoming(chat, sender=CLIENT_ID, text="   "), bot
+    )
+    assert len(bot.sent) == 1, "пробелы остались без ответа"
+    assert "Первое сообщение: другое" in bot.notified[0]["text"]
+
+
+async def notification_prefers_caption_over_kind():
+    """Подпись к фото важнее самого факта, что это фото.
+
+    Telegram кладёт её в caption, а не в text. Без этого клиент, приславший
+    паспорт с подписью, выглядел бы в сводке просто как «фото» — а там как
+    раз и сказано, что именно он прислал.
+    """
+    bot, chat = fresh_bot(), 1031
+
+    await business.business_message(
+        incoming(chat, sender=CLIENT_ID, kind="photo",
+                 caption="Mana pasport nusxasi"),
+        bot,
+    )
+    assert len(bot.sent) == 1, "фото с подписью осталось без ответа"
+
+    note = bot.notified[0]["text"]
+    assert "Первое сообщение: Mana pasport nusxasi" in note, note
+    assert "фото" not in note, f"тип перебил подпись:\n{note}"
+
+    # Подпись из одних пробелов подписью не считается — остаётся тип.
+    bot, chat = fresh_bot(), 1032
+    await business.business_message(
+        incoming(chat, sender=CLIENT_ID, kind="photo", caption="   "), bot
+    )
+    assert "Первое сообщение: фото" in bot.notified[0]["text"]
+
+
 async def no_notification_without_reply():
     """Повторное сообщение ответа не даёт — значит и сводки быть не должно."""
     bot, chat = fresh_bot(), 1009
@@ -275,11 +363,13 @@ CHECKS = (
     replies_once_per_chat,
     silent_after_owner_took_over,
     owner_takeover_after_reply,
-    ignores_messages_without_text,
+    replies_to_messages_without_text,
     ignores_own_reply_echo,
     silent_when_owner_unknown,
     claim_is_atomic,
     notifies_about_new_client,
+    notification_shows_message_kind,
+    notification_prefers_caption_over_kind,
     no_notification_without_reply,
     works_without_notify_id,
     notify_failure_does_not_break_reply,

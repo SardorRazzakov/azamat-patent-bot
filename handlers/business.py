@@ -5,8 +5,9 @@
 отдельным типом business_message и обычных хендлеров не касаются — здесь
 свой роутер и свой обсервер.
 
-Поведение: один автоответ на диалог, только на текст. Если владелец написал
-в чат сам, бот замолкает там навсегда.
+Поведение: один автоответ на диалог, на любое сообщение — текст, голосовое,
+фото. Клиенты часто начинают именно с них, и раньше такие люди оставались
+без ответа. Если владелец написал в чат сам, бот замолкает там навсегда.
 
 КАК ОТЛИЧИТЬ КЛИЕНТА ОТ ВЛАДЕЛЬЦА. Поля is_outgoing в Bot API нет:
 business_message приходит и на входящие, и на исходящие сообщения чата.
@@ -62,6 +63,34 @@ REPLY = (
 # в сводке ни к чему, суть видна по первым строкам.
 NOTIFY_TEXT_LIMIT = 200
 
+# Чем описать сообщение без текста. Клиенты часто начинают голосовым или
+# сразу шлют фото паспорта — в сводке важно, что именно пришло.
+MESSAGE_KINDS = (
+    ("voice", "голосовое"),
+    ("photo", "фото"),
+    ("video", "видео"),
+    ("document", "файл"),
+    ("sticker", "стикер"),
+)
+
+
+def describe(message: Message) -> str:
+    """Текст сообщения, а если текста нет — его тип.
+
+    Подпись к медиа Telegram кладёт в caption, а не в text: без неё фото
+    паспорта с подписью «Mana pasport» выглядело бы в сводке просто «фото».
+    """
+    for value in (message.text, message.caption):
+        value = (value or "").strip()
+        if value:
+            return value[:NOTIFY_TEXT_LIMIT]
+
+    for field, name in MESSAGE_KINDS:
+        if getattr(message, field, None):
+            return name
+    return "другое"
+
+
 # id владельца на подключение. В памяти намеренно: значение всегда можно
 # перезапросить, а неверно переживший рестарт владелец был бы опаснее.
 _owners: dict[str, int] = {}
@@ -106,7 +135,7 @@ async def notify_new_client(bot: Bot, message: Message):
 
     user = message.from_user
     username = f"@{user.username}" if user.username else "без username"
-    text = (message.text or "")[:NOTIFY_TEXT_LIMIT]
+    text = describe(message)
 
     try:
         await bot.send_message(
@@ -139,10 +168,6 @@ async def business_message(message: Message, bot: Bot):
     # Владелец ответил сам — этот чат теперь его, бот сюда больше не пишет.
     if message.from_user.id == owner:
         await db.mark_business_takeover(message.chat.id)
-        return
-
-    # Стикеры, фото, голосовые, файлы: здороваться в ответ на них не нужно.
-    if not (message.text or "").strip():
         return
 
     if not await db.claim_business_reply(message.chat.id):
