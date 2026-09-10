@@ -43,11 +43,15 @@ NOTIFY_ID = 555
 class FakeBot:
     """Отдаёт владельца подключения и копит отправленные сообщения."""
 
-    def __init__(self, owner: int | None = OWNER_ID, notify_fails: bool = False):
+    def __init__(self, owner: int | None = OWNER_ID, notify_fails: bool = False,
+                 voice_fails: bool = False):
         self.owner = owner
         self.notify_fails = notify_fails
+        self.voice_fails = voice_fails
         self.sent: list[dict] = []           # ответы клиенту
         self.notified: list[dict] = []       # сводки о новом клиенте
+        self.voices: list[dict] = []         # голосовые приветствия
+        self.order: list[str] = []           # что за чем ушло
 
     async def get_business_connection(self, connection_id: str):
         if self.owner is None:
@@ -69,8 +73,19 @@ class FakeBot:
             if self.notify_fails:
                 raise RuntimeError("получатель заблокировал бота")
             self.notified.append(entry)
+            self.order.append("notify")
         else:
             self.sent.append(entry)
+            self.order.append("reply")
+
+    async def send_voice(self, chat_id, voice, business_connection_id=None, **kw):
+        if self.voice_fails:
+            raise RuntimeError("файл слишком большой")
+        self.voices.append({
+            "chat_id": chat_id,
+            "business_connection_id": business_connection_id,
+        })
+        self.order.append("voice")
 
 
 # Сообщения без текста: у таких клиент присылает голосовое или фото
@@ -110,10 +125,11 @@ def incoming(chat_id: int, *, sender: int, text: str | None = "salom",
     )
 
 
-def fresh_bot(owner: int | None = OWNER_ID, notify_fails: bool = False) -> FakeBot:
+def fresh_bot(owner: int | None = OWNER_ID, notify_fails: bool = False,
+              voice_fails: bool = False) -> FakeBot:
     # кэш владельца живёт в модуле и между случаями его надо сбрасывать
     business._owners.clear()
-    return FakeBot(owner, notify_fails)
+    return FakeBot(owner, notify_fails, voice_fails)
 
 
 # ---------- ПРОВЕРКИ ----------
@@ -187,6 +203,41 @@ async def replies_to_messages_without_text():
             incoming(chat, sender=CLIENT_ID, kind=kind), bot
         )
         assert len(bot.sent) == 1, f"{kind}: ответил повторно"
+
+
+async def sends_voice_before_price():
+    """Голос идёт первым, следом прайс — в таком порядке их и слушают."""
+    assert business.VOICE_PATH.exists(), (
+        f"нет файла приветствия: {business.VOICE_PATH}"
+    )
+    bot, chat = fresh_bot(), 1040
+
+    await business.business_message(incoming(chat, sender=CLIENT_ID), bot)
+
+    assert len(bot.voices) == 1, f"голосовых отправлено {len(bot.voices)}"
+    assert bot.voices[0]["chat_id"] == chat
+    # без него голосовое уйдёт от имени бота, а не владельца
+    assert bot.voices[0]["business_connection_id"] == "conn-1"
+    assert bot.order[:2] == ["voice", "reply"], f"порядок отправки: {bot.order}"
+
+    # правило «один ответ на диалог» распространяется и на голос
+    await business.business_message(incoming(chat, sender=CLIENT_ID), bot)
+    assert len(bot.voices) == 1, "голосовое ушло повторно"
+
+
+async def voice_failure_does_not_block_price():
+    """Голосовое не ушло — прайс всё равно должен дойти.
+
+    Иначе сбойный файл оставлял бы клиента вообще без ответа, а чат при
+    этом уже помечен отвеченным: второй попытки не будет.
+    """
+    bot, chat = fresh_bot(voice_fails=True), 1041
+
+    await business.business_message(incoming(chat, sender=CLIENT_ID), bot)
+
+    assert not bot.voices, "голосовое записалось, хотя отправка упала"
+    assert len(bot.sent) == 1, "из-за голосового не ушёл прайс"
+    assert bot.sent[0]["text"] == business.REPLY
 
 
 async def ignores_own_reply_echo():
@@ -364,6 +415,8 @@ CHECKS = (
     silent_after_owner_took_over,
     owner_takeover_after_reply,
     replies_to_messages_without_text,
+    sends_voice_before_price,
+    voice_failure_does_not_block_price,
     ignores_own_reply_echo,
     silent_when_owner_unknown,
     claim_is_atomic,

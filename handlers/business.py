@@ -7,7 +7,8 @@
 
 Поведение: один автоответ на диалог, на любое сообщение — текст, голосовое,
 фото. Клиенты часто начинают именно с них, и раньше такие люди оставались
-без ответа. Если владелец написал в чат сам, бот замолкает там навсегда.
+без ответа. Ответ идёт в два сообщения: голосовое приветствие, следом
+прайс. Если владелец написал в чат сам, бот замолкает там навсегда.
 
 КАК ОТЛИЧИТЬ КЛИЕНТА ОТ ВЛАДЕЛЬЦА. Поля is_outgoing в Bot API нет:
 business_message приходит и на входящие, и на исходящие сообщения чата.
@@ -26,13 +27,20 @@ business_message приходит и на входящие, и на исходя
 написать не тому.
 """
 
+from pathlib import Path
+
 from aiogram import Bot, Router
-from aiogram.types import BusinessConnection, Message
+from aiogram.types import BusinessConnection, FSInputFile, Message
 
 import config
 import db
 
 router = Router(name="business")
+
+# Голосовое приветствие идёт перед прайсом: живой голос владельца в первом
+# сообщении располагает сильнее стены текста. Путь от корня проекта, а не
+# от рабочего каталога: на Railway процесс стартует не обязательно из него.
+VOICE_PATH = Path(__file__).resolve().parent.parent / "voice" / "greeting.ogg"
 
 # Текст один и не идёт через texts.py: язык клиента здесь неизвестен —
 # он ещё ничего не выбирал и в users его нет.
@@ -121,6 +129,30 @@ async def connection_changed(event: BusinessConnection):
     print(f"[business] подключение {event.id}: {state}, владелец {event.user.id}")
 
 
+async def send_greeting_voice(bot: Bot, chat_id: int, connection_id: str):
+    """Голосовое приветствие перед прайсом.
+
+    Файла может не оказаться — его кладут руками, и в репозиторий он мог не
+    доехать. Молчим и идём дальше: прайс важнее приветствия, и остаться
+    из-за отсутствующей записи совсем без ответа клиент не должен.
+
+    По той же причине глотаются и ошибки отправки: слишком большой файл,
+    отозванное подключение, сеть.
+    """
+    if not VOICE_PATH.exists():
+        print(f"[business] голосовое приветствие не найдено: {VOICE_PATH}")
+        return
+
+    try:
+        await bot.send_voice(
+            chat_id=chat_id,
+            voice=FSInputFile(VOICE_PATH),
+            business_connection_id=connection_id,
+        )
+    except Exception as e:
+        print(f"[business] голосовое в чат {chat_id} не ушло: {e}")
+
+
 async def notify_new_client(bot: Bot, message: Message):
     """Сводка о новом клиенте тому, кто разбирает личку владельца.
 
@@ -172,6 +204,10 @@ async def business_message(message: Message, bot: Bot):
 
     if not await db.claim_business_reply(message.chat.id):
         return
+
+    # Сначала голос, следом прайс — в таком порядке их и читают. Своих
+    # ошибок наружу не отдаёт, поэтому прайс уйдёт в любом случае.
+    await send_greeting_voice(bot, message.chat.id, connection_id)
 
     try:
         # business_connection_id обязателен: без него ответ уйдёт от имени
